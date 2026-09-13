@@ -1,0 +1,16 @@
+# Build context hygiene: keep the image small and never bake in secrets or state.
+target/
+.git/
+.gitignore
+reviews/
+README.md
+
+# Secrets and personal config — mounted at runtime, never built in.
+config.toml
+.env
+
+# Local state
+*.db
+*.db-shm
+*.db-wal
+*.log

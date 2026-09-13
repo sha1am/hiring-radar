@@ -1,0 +1,40 @@
+services:
+  radar:
+    build: .
+    image: hiring-radar:latest
+    container_name: hiring-radar
+    restart: unless-stopped
+
+    # Published to loopback only. The process inside binds 0.0.0.0 because it
+    # must, but the dashboard has no authentication — do not change the left
+    # side of this mapping to 0.0.0.0 without putting an auth proxy in front.
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    volumes:
+      # Your config, read-only. Copy config.example.toml -> config.toml first.
+      - ./config.toml:/app/config.toml:ro
+      # SQLite lives here so the queue, the seen-set and the rolling budget all
+      # survive `docker compose down`.
+      - radar-data:/data
+
+    # Secrets: SMTP_PASSWORD, and LI_AT / LI_JSESSIONID if you enable voyager.
+    env_file:
+      - path: .env
+        required: false
+
+    environment:
+      RADAR_BIND: 0.0.0.0:8080
+      # What the ntfy "open dashboard" button and the alert emails link to.
+      # Change if you reverse-proxy this somewhere else.
+      RADAR_BASE_URL: ${RADAR_BASE_URL:-http://127.0.0.1:8080}
+      RUST_LOG: ${RUST_LOG:-hiring_radar=info,tower_http=warn}
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  radar-data:

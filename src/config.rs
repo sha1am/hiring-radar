@@ -132,6 +132,16 @@ impl Config {
         cfg.linkedin_voyager.li_at = std::env::var("LI_AT").ok();
         cfg.linkedin_voyager.jsessionid = std::env::var("LI_JSESSIONID").ok();
 
+        // Deployment-shaped overrides. In a container the process must bind
+        // 0.0.0.0 while the *published* port stays loopback-only on the host, so
+        // bind and base_url have to be settable without editing the mounted file.
+        if let Ok(v) = std::env::var("RADAR_BIND") {
+            cfg.server.bind = v;
+        }
+        if let Ok(v) = std::env::var("RADAR_BASE_URL") {
+            cfg.server.base_url = v;
+        }
+
         if cfg.email.smtp_password.is_none() {
             tracing::warn!("SMTP_PASSWORD unset — email alerts and application sends will fail");
         }

@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1
+
+# ---------- builder ----------
+# Deps are built in their own layer so day-to-day source edits rebuild in
+# seconds instead of re-compiling tokio/axum/sqlx every time.
+FROM rust:1-slim-bookworm AS builder
+
+WORKDIR /app
+
+# blake3 and the bundled libsqlite3-sys both need a C toolchain. TLS is rustls
+# throughout (see Cargo.toml), so there is deliberately no OpenSSL here.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+
+# Dependency layer: a stub main.rs lets cargo resolve and build every crate
+# without the real sources being present.
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src \
+ && echo 'fn main() {}' > src/main.rs \
+ && cargo build --release \
+ && rm -rf src
+
+# Real sources. Touch main.rs so cargo invalidates only this crate.
+COPY src ./src
+RUN touch src/main.rs \
+ && cargo build --release \
+ && strip target/release/hiring-radar
+
+# ---------- runtime ----------
+FROM debian:bookworm-slim
+
+# ca-certificates for outbound TLS (Greenhouse, LinkedIn, ntfy, SMTP);
+# curl only so HEALTHCHECK has something to call.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --create-home --uid 10001 radar \
+ && mkdir -p /data \
+ && chown radar:radar /data
+
+COPY --from=builder /app/target/release/hiring-radar /usr/local/bin/hiring-radar
+
+USER radar
+WORKDIR /app
+
+# config.toml is mounted read-only at runtime; state lives on the /data volume.
+ENV RADAR_CONFIG=/app/config.toml \
+    RADAR_DB=/data/hiring.db \
+    RADAR_BIND=0.0.0.0:8080 \
+    RUST_LOG=hiring_radar=info,tower_http=warn
+
+VOLUME ["/data"]
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8080/queue > /dev/null || exit 1
+
+CMD ["hiring-radar"]

@@ -35,7 +35,10 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Arc::new(Config::load(&cfg_path)?);
     tracing::info!("loaded config for {}", cfg.profile.name);
 
-    let pool = db::connect("sqlite:hiring.db?mode=rwc").await?;
+    // DB path is env-driven so the container can keep state on a mounted volume.
+    let db_path = std::env::var("RADAR_DB").unwrap_or_else(|_| "hiring.db".into());
+    let pool = db::connect(&format!("sqlite:{db_path}?mode=rwc")).await?;
+    tracing::info!(db = %db_path, "database ready");
 
     let http = reqwest::Client::builder()
         .user_agent(cfg.crawl.user_agent.clone())
