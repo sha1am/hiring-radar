@@ -25,7 +25,7 @@ RUN mkdir -p src \
 COPY src ./src
 RUN touch src/main.rs \
  && cargo build --release \
- && strip target/release/hiring-radar
+ && (strip target/release/hiring-radar || true)
 
 # ---------- runtime ----------
 FROM debian:bookworm-slim
