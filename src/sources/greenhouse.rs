@@ -1,0 +1,111 @@
+use super::JobSource;
+use crate::model::{ApplyChannel, RawPost};
+use serde::Deserialize;
+
+/// Greenhouse exposes every company board as public JSON. No auth, no ban risk.
+/// This is the source you point at first to prove the pipeline works end to end.
+pub struct Greenhouse {
+    client: reqwest::Client,
+    boards: Vec<String>,
+}
+
+impl Greenhouse {
+    pub fn new(client: reqwest::Client, boards: Vec<String>) -> Self {
+        Self { client, boards }
+    }
+}
+
+#[derive(Deserialize)]
+struct Resp {
+    jobs: Vec<Job>,
+}
+#[derive(Deserialize)]
+struct Job {
+    id: i64,
+    title: String,
+    absolute_url: String,
+    #[serde(default)]
+    location: Option<Loc>,
+    #[serde(default)]
+    content: String,
+}
+#[derive(Deserialize)]
+struct Loc {
+    name: String,
+}
+
+fn strip_html(s: &str) -> String {
+    // Good-enough tag stripper for scoring + display; not a real HTML parser.
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&#39;", "'")
+        .replace("&quot;", "\"")
+}
+
+#[async_trait::async_trait]
+impl JobSource for Greenhouse {
+    fn name(&self) -> &str {
+        "greenhouse"
+    }
+
+    async fn fetch(&self) -> anyhow::Result<Vec<RawPost>> {
+        let mut posts = Vec::new();
+        for board in &self.boards {
+            let url = format!(
+                "https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
+            );
+            let resp = match self.client.get(&url).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(board, %e, "greenhouse fetch failed");
+                    continue;
+                }
+            };
+            if !resp.status().is_success() {
+                tracing::warn!(board, status = %resp.status(), "greenhouse non-200");
+                continue;
+            }
+            let data: Resp = match resp.json().await {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(board, %e, "greenhouse json parse failed");
+                    continue;
+                }
+            };
+            let company = pretty(board);
+            for j in data.jobs {
+                posts.push(RawPost {
+                    source: "greenhouse".into(),
+                    external_id: format!("{board}:{}", j.id),
+                    url: j.absolute_url.clone(),
+                    title: j.title,
+                    company: company.clone(),
+                    location: j.location.map(|l| l.name),
+                    body: strip_html(&j.content),
+                    posted_at: None, // treated as fresh when first seen
+                    apply: ApplyChannel::ExternalUrl(j.absolute_url),
+                });
+            }
+        }
+        Ok(posts)
+    }
+}
+
+fn pretty(board: &str) -> String {
+    let mut c = board.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => board.to_string(),
+    }
+}

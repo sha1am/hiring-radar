@@ -1,0 +1,78 @@
+# Copy to config.toml and edit. Secrets come from ENV, not this file:
+#   SMTP_PASSWORD   - your SMTP / Gmail app password        (required to send email)
+#   LI_AT           - your LinkedIn li_at cookie value      (only for the voyager source)
+#   LI_JSESSIONID   - your LinkedIn JSESSIONID cookie value (only for the voyager source)
+
+[profile]
+name        = "Shadab"
+email       = "you@example.com"          # where YOUR alerts land
+titles      = ["backend engineer", "software engineer", "sde", "platform engineer", "golang developer"]
+keywords    = ["go", "golang", "rust", "kafka", "postgres", "kubernetes", "distributed systems", "microservices"]
+locations   = ["gurugram", "gurgaon", "bengaluru", "bangalore", "delhi", "noida"]
+remote_ok   = true
+seniority   = ["mid", "senior", "sde 2", "sde-2", "ii"]
+dealbreakers = ["unpaid", "commission only", "wordpress", "php", "sales executive"]
+# min_salary = 2500000   # optional; scorer will penalise detected pay below this (LPA/number in post)
+
+[crawl]
+user_agent          = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+target_search_secs  = 90     # tight poll for your exact target-role queries
+broad_search_secs   = 600    # relaxed poll for broad hiring hashtags
+jitter_secs         = 30     # random +/- added to every interval to avoid a detectable cadence
+
+# Safe, no-ban-risk source used to exercise the whole pipeline end to end.
+# Add the public board tokens of companies you like: https://boards.greenhouse.io/<token>
+[greenhouse]
+enabled = true
+boards  = ["stripe", "airbnb", "gitlab"]
+
+# LinkedIn guest jobs endpoint. No login, lower ban risk, returns formal listings.
+[[crawl.linkedin_queries]]
+keywords = "golang backend"
+location = "India"
+
+[[crawl.linkedin_queries]]
+keywords = "rust engineer"
+location = "Remote"
+
+# Authenticated Voyager content search = actual "we're hiring" people-posts.
+# Fragile + higher ban risk. Disabled unless enabled=true AND LI_AT env is set.
+[linkedin_voyager]
+enabled = false
+# queryId is what breaks when LinkedIn ships changes; grab a fresh one from DevTools -> Network.
+query_id = "voyagerSearchDashClusters.REPLACE_ME"
+
+[release]
+per_hour_cap        = 4       # <= the hard rolling-60-min notification budget
+per_poster_cap      = 1       # one company/recruiter can hold at most this many slots per hour
+tick_secs           = 30      # how often the release engine re-evaluates the pool
+score_floor         = 55.0    # below this, a post is discarded and never stored
+strong_min          = 75.0    # >= this is a "strong" tier (settling window applies)
+exceptional_min     = 92.0    # >= this fires immediately, jumping the queue
+settle_strong_secs  = 360     # strong posts wait this long, then release best-of-window
+candidate_ttl_secs  = 43200   # a losing post keeps competing for 12h, then expires
+
+# v2 nicety: relax the bar as the hour drains so a quiet hour doesn't waste the budget.
+adaptive_threshold  = true
+adaptive_start      = 82.0    # required score at :00 with all 4 slots free
+adaptive_end        = 70.0    # required score at :59
+
+[ntfy]
+server = "https://ntfy.sh"
+topic  = "hiring-radar-CHANGE-ME-to-something-unguessable"
+
+[email]
+smtp_host = "smtp.gmail.com"
+smtp_port = 587
+smtp_user = "you@gmail.com"
+from      = "Hiring Radar <you@gmail.com>"
+
+[server]
+bind     = "127.0.0.1:8080"
+base_url = "http://127.0.0.1:8080"
+
+# Draft engine. "template" = zero-dependency built-in. "ollama" = local LLM (free) at ollama_url.
+[draft]
+provider   = "template"
+ollama_url = "http://127.0.0.1:11434"
+ollama_model = "llama3.1"

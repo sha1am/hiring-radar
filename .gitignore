@@ -1,0 +1,6 @@
+/target
+config.toml
+hiring.db
+hiring.db-*
+*.log
+.env
