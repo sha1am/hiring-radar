@@ -2,7 +2,7 @@
 name = "hiring-radar"
 version = "0.1.0"
 edition = "2021"
-description = "Self-hosted LinkedIn hiring-post radar: detect -> classify -> score -> tiered instant release -> ntfy push + email + dashboard"
+description = "Self-hosted hiring-post radar: detect -> classify -> resume-match -> tiered release under a rolling alert budget -> ntfy push + email + dashboard"
 
 [dependencies]
 tokio = { version = "1.38", features = ["full"] }
