@@ -134,7 +134,22 @@ pub struct DraftCfg {
 
 impl Config {
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let text = std::fs::read_to_string(path)?;
+        let path = path.as_ref();
+
+        // Docker's classic footgun: a bind mount whose source file doesn't
+        // exist on the host is created as a DIRECTORY, so the container starts
+        // and dies on an opaque "Is a directory" read error. Name it instead.
+        if path.is_dir() {
+            anyhow::bail!(
+                "{} is a directory, not a file. Docker does this when the bind \
+                 mount source is missing — run `cp config.example.toml config.toml` \
+                 on the host, remove the directory Docker created, and start again.",
+                path.display()
+            );
+        }
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            anyhow::anyhow!("cannot read config at {}: {e}", path.display())
+        })?;
         let mut cfg: Config = toml::from_str(&text)?;
 
         // Secrets never live in the file; pull them from the environment.
