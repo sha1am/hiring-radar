@@ -16,25 +16,32 @@ pub async fn ingest(state: &AppState, post: RawPost, backfill: bool) -> anyhow::
         return Ok(());
     }
 
+    // Snapshot the settings once: a save mid-ingest must not score a post
+    // against one profile and tier it against another.
+    let live = state.settings().await;
+
     // 2. Score against the profile.
     let scorer = LexicalScorer;
-    let score = scorer.score(&post, &state.cfg.profile);
+    let score = scorer.score(&post, &live);
 
     // 3. Tier — below the floor is dropped entirely (never stored).
-    let Some(tier) = Tier::from_score(score, &state.cfg.release) else {
+    let Some(tier) = Tier::from_score(score, &live) else {
         return Ok(());
     };
 
     let detected = now();
     let prio = priority(score, post.posted_at, detected, detected);
-    let settle_until = detected + tier.settle_secs(&state.cfg.release);
-    let expires_at = detected + state.cfg.release.candidate_ttl_secs;
+    let settle_until = detected + tier.settle_secs(&live);
+    let expires_at = detected + live.candidate_ttl_secs;
 
     // 4. Draft-ahead for anything that could fire, so the draft is ready on arrival.
     //    Backfill can't fire, so drafting it would be wasted work (and, with the
     //    ollama drafter, a very slow first crawl).
     let (draft_subject, draft_body) = if !backfill && matches!(tier, Tier::Exceptional | Tier::Strong) {
-        let (s, b) = state.drafter.draft(&post, &state.cfg.profile).await;
+        let (s, b) = state
+            .drafter
+            .draft(&post, &live, &state.cfg.profile.name, &state.cfg.profile.email)
+            .await;
         (Some(s), Some(b))
     } else {
         (None, None)

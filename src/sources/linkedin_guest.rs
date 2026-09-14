@@ -1,6 +1,6 @@
 use super::JobSource;
-use crate::config::LinkedInQuery;
 use crate::model::{ApplyChannel, RawPost};
+use crate::settings::Settings;
 use crate::timeparse;
 use scraper::{Html, Selector};
 
@@ -9,12 +9,11 @@ use scraper::{Html, Selector};
 /// freshness window we care about. Returns HTML job cards.
 pub struct LinkedInGuest {
     client: reqwest::Client,
-    queries: Vec<LinkedInQuery>,
 }
 
 impl LinkedInGuest {
-    pub fn new(client: reqwest::Client, queries: Vec<LinkedInQuery>) -> Self {
-        Self { client, queries }
+    pub fn new(client: reqwest::Client) -> Self {
+        Self { client }
     }
 }
 
@@ -24,9 +23,12 @@ impl JobSource for LinkedInGuest {
         "linkedin_guest"
     }
 
-    async fn fetch(&self) -> anyhow::Result<Vec<RawPost>> {
+    async fn fetch(&self, cfg: &Settings) -> anyhow::Result<Vec<RawPost>> {
         let mut posts = Vec::new();
-        for q in &self.queries {
+        if !cfg.linkedin_guest_enabled {
+            return Ok(posts);
+        }
+        for q in &cfg.linkedin_queries {
             let url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search";
             let resp = self
                 .client

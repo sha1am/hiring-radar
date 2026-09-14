@@ -8,6 +8,7 @@ mod pipeline;
 mod release;
 mod score;
 mod sources;
+mod settings;
 mod state;
 mod timeparse;
 mod web;
@@ -17,6 +18,7 @@ use crate::sources::greenhouse::Greenhouse;
 use crate::sources::linkedin_guest::LinkedInGuest;
 use crate::sources::linkedin_voyager::Voyager;
 use crate::sources::JobSource;
+use crate::settings::Settings;
 use crate::state::AppState;
 use rand::Rng;
 use std::sync::Arc;
@@ -49,44 +51,47 @@ async fn main() -> anyhow::Result<()> {
     let drafter: Arc<dyn draft::Drafter> = Arc::from(draft::build_drafter(&cfg.draft, http.clone()));
     let (events, _) = tokio::sync::broadcast::channel::<()>(64);
 
+    // config.toml seeds the settings the first time only; after that the stored
+    // row wins, so dashboard edits survive a restart.
+    let live = match db::load_settings(&pool).await? {
+        Some(s) => {
+            tracing::info!("settings loaded from database");
+            s
+        }
+        None => {
+            let mut s = Settings::from_config(&cfg);
+            s.sanitize();
+            db::save_settings(&pool, &s).await?;
+            tracing::info!("settings seeded from config.toml");
+            s
+        }
+    };
+
     let state = AppState {
         pool: pool.clone(),
         cfg: cfg.clone(),
         http: http.clone(),
         drafter,
         events,
+        settings: Arc::new(tokio::sync::RwLock::new(Arc::new(live))),
     };
 
     // ---- assemble sources ----
-    let mut sources: Vec<(Box<dyn JobSource>, u64)> = Vec::new();
-
-    if cfg.greenhouse.enabled && !cfg.greenhouse.boards.is_empty() {
-        sources.push((
-            Box::new(Greenhouse::new(http.clone(), cfg.greenhouse.boards.clone())),
-            cfg.crawl.broad_search_secs,
-        ));
-    }
-    if !cfg.crawl.linkedin_queries.is_empty() {
-        sources.push((
-            Box::new(LinkedInGuest::new(http.clone(), cfg.crawl.linkedin_queries.clone())),
-            cfg.crawl.target_search_secs,
-        ));
-    }
-    if cfg.linkedin_voyager.enabled {
-        sources.push((
+    // Every source gets a loop unconditionally; each one checks the live
+    // settings on every pass and no-ops when disabled. Enabling a source from
+    // the dashboard therefore takes effect on its next tick, with no restart.
+    let sources: Vec<(Box<dyn JobSource>, u64)> = vec![
+        (Box::new(Greenhouse::new(http.clone())), cfg.crawl.broad_search_secs),
+        (Box::new(LinkedInGuest::new(http.clone())), cfg.crawl.target_search_secs),
+        (
             Box::new(Voyager::new(
                 http.clone(),
                 cfg.linkedin_voyager.clone(),
                 cfg.crawl.user_agent.clone(),
-                cfg.profile.titles.clone(),
             )),
             cfg.crawl.target_search_secs,
-        ));
-    }
-
-    if sources.is_empty() {
-        tracing::warn!("no sources enabled — check [greenhouse] / [[crawl.linkedin_queries]] in config");
-    }
+        ),
+    ];
 
     // ---- spawn a crawl loop per source ----
     for (source, interval) in sources {
@@ -155,7 +160,11 @@ async fn main() -> anyhow::Result<()> {
 async fn crawl_loop(state: AppState, source: Box<dyn JobSource>, interval: u64, jitter: u64) {
     let name = source.name().to_string();
     loop {
-        match source.fetch().await {
+        let live = state.settings().await;
+        match source.fetch(&live).await {
+            Ok(posts) if posts.is_empty() => {
+                tracing::debug!(source = %name, "nothing returned (source disabled or empty)");
+            }
             Ok(posts) => {
                 // First non-empty cycle for this source is a backfill: record, don't notify.
                 let bootstrapping = db::seen_count(&state.pool, &name).await.unwrap_or(0) == 0;

@@ -1,6 +1,7 @@
 use super::JobSource;
 use crate::config::Voyager as VoyagerCfg;
 use crate::model::{ApplyChannel, RawPost};
+use crate::settings::Settings;
 use serde_json::Value;
 
 /// Authenticated content search against LinkedIn's internal Voyager API — the
@@ -16,21 +17,18 @@ pub struct Voyager {
     client: reqwest::Client,
     cfg: VoyagerCfg,
     user_agent: String,
-    keywords: Vec<String>,
 }
 
 impl Voyager {
-    pub fn new(
-        client: reqwest::Client,
-        cfg: VoyagerCfg,
-        user_agent: String,
-        keywords: Vec<String>,
-    ) -> Self {
-        Self { client, cfg, user_agent, keywords }
+    pub fn new(client: reqwest::Client, cfg: VoyagerCfg, user_agent: String) -> Self {
+        Self { client, cfg, user_agent }
     }
 
-    fn ready(&self) -> bool {
-        self.cfg.enabled
+    /// Credentials and the queryId still come from config/env — they are
+    /// secrets and a fragile constant, not things to edit in a web form. The
+    /// dashboard toggle only decides whether to use them.
+    fn ready(&self, live: &Settings) -> bool {
+        live.voyager_enabled
             && self.cfg.li_at.is_some()
             && !self.cfg.query_id.is_empty()
             && !self.cfg.query_id.contains("REPLACE_ME")
@@ -43,8 +41,8 @@ impl JobSource for Voyager {
         "linkedin_voyager"
     }
 
-    async fn fetch(&self) -> anyhow::Result<Vec<RawPost>> {
-        if !self.ready() {
+    async fn fetch(&self, live: &Settings) -> anyhow::Result<Vec<RawPost>> {
+        if !self.ready(live) {
             tracing::debug!("voyager source not configured; skipping");
             return Ok(vec![]);
         }
@@ -54,7 +52,7 @@ impl JobSource for Voyager {
         let csrf = jsession.trim_matches('"');
         let cookie = format!("li_at={li_at}; JSESSIONID=\"{jsession}\"");
 
-        let keywords = self.keywords.join(" OR ");
+        let keywords = live.titles.join(" OR ");
         let mut posts = Vec::new();
 
         // The variables blob is query-specific; this is the common content-search shape.

@@ -1,4 +1,4 @@
-use crate::config::ReleaseCfg;
+use crate::settings::Settings;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Seconds since the Unix epoch. The whole system uses i64 unix time to keep
@@ -85,7 +85,7 @@ pub enum Tier {
 
 impl Tier {
     /// `None` means the post is below the floor and should be dropped entirely.
-    pub fn from_score(score: f64, cfg: &ReleaseCfg) -> Option<Tier> {
+    pub fn from_score(score: f64, cfg: &Settings) -> Option<Tier> {
         if score >= cfg.exceptional_min {
             Some(Tier::Exceptional)
         } else if score >= cfg.strong_min {
@@ -105,7 +105,7 @@ impl Tier {
     }
     /// How long a freshly-detected post of this tier holds before it may fire.
     /// Exceptional posts never settle — being first is the whole point.
-    pub fn settle_secs(&self, cfg: &ReleaseCfg) -> i64 {
+    pub fn settle_secs(&self, cfg: &Settings) -> i64 {
         match self {
             Tier::Exceptional => 0,
             Tier::Strong => cfg.settle_strong_secs,

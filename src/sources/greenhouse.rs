@@ -1,5 +1,6 @@
 use super::JobSource;
 use crate::model::{ApplyChannel, RawPost};
+use crate::settings::Settings;
 use crate::timeparse;
 use serde::Deserialize;
 
@@ -7,7 +8,6 @@ use serde::Deserialize;
 /// This is the source you point at first to prove the pipeline works end to end.
 pub struct Greenhouse {
     client: reqwest::Client,
-    boards: Vec<String>,
     base: String,
 }
 
@@ -17,13 +17,13 @@ pub struct Greenhouse {
 const DEFAULT_BASE: &str = "https://boards-api.greenhouse.io/v1/boards";
 
 impl Greenhouse {
-    pub fn new(client: reqwest::Client, boards: Vec<String>) -> Self {
+    pub fn new(client: reqwest::Client) -> Self {
         let base = std::env::var("RADAR_GREENHOUSE_BASE")
             .unwrap_or_else(|_| DEFAULT_BASE.to_string());
         if base != DEFAULT_BASE {
             tracing::warn!(%base, "greenhouse base URL overridden (fixture mode?)");
         }
-        Self { client, boards, base }
+        Self { client, base }
     }
 }
 
@@ -79,9 +79,12 @@ impl JobSource for Greenhouse {
         "greenhouse"
     }
 
-    async fn fetch(&self) -> anyhow::Result<Vec<RawPost>> {
+    async fn fetch(&self, cfg: &Settings) -> anyhow::Result<Vec<RawPost>> {
         let mut posts = Vec::new();
-        for board in &self.boards {
+        if !cfg.greenhouse_enabled {
+            return Ok(posts);
+        }
+        for board in &cfg.greenhouse_boards {
             let url = format!("{}/{board}/jobs?content=true", self.base.trim_end_matches('/'));
             let resp = match self.client.get(&url).send().await {
                 Ok(r) => r,

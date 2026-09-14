@@ -1,5 +1,6 @@
-use crate::config::{DraftCfg, Profile};
+use crate::config::DraftCfg;
 use crate::model::{ApplyChannel, RawPost};
+use crate::settings::Settings;
 use serde_json::json;
 
 /// Produces (subject, body). Subject is only meaningful for the email channel.
@@ -7,7 +8,7 @@ use serde_json::json;
 /// finished draft is already waiting the instant a card hits the dashboard.
 #[async_trait::async_trait]
 pub trait Drafter: Send + Sync {
-    async fn draft(&self, post: &RawPost, p: &Profile) -> (String, String);
+    async fn draft(&self, post: &RawPost, p: &Settings, name: &str, email: &str) -> (String, String);
 }
 
 /// Instant, free, offline. Shapes the message to the post's apply channel.
@@ -15,7 +16,7 @@ pub struct TemplateDrafter;
 
 #[async_trait::async_trait]
 impl Drafter for TemplateDrafter {
-    async fn draft(&self, post: &RawPost, p: &Profile) -> (String, String) {
+    async fn draft(&self, post: &RawPost, p: &Settings, name: &str, email: &str) -> (String, String) {
         let subject = format!("Application: {} at {}", post.title, post.company);
         let skills = p.keywords.iter().take(4).cloned().collect::<Vec<_>>().join(", ");
         let body = match &post.apply {
@@ -23,14 +24,14 @@ impl Drafter for TemplateDrafter {
                 "Hi — saw your post about the {} role. I'm a backend engineer with \
                  experience in {}, and it looks like a strong fit. Would love to share \
                  my background — open to a quick chat?\n\n— {}",
-                post.title, skills, p.name
+                post.title, skills, name
             ),
             _ => format!(
                 "Hi,\n\nI came across the {} opening at {} and I'm very interested. \
                  I work as a backend engineer with hands-on experience in {}, and I \
                  believe I'd contribute quickly to your team.\n\nI've attached my resume \
                  and would welcome the chance to discuss the role.\n\nBest regards,\n{}\n{}",
-                post.title, post.company, skills, p.name, p.email
+                post.title, post.company, skills, name, email
             ),
         };
         (subject, body)
@@ -48,7 +49,7 @@ pub struct OllamaDrafter {
 
 #[async_trait::async_trait]
 impl Drafter for OllamaDrafter {
-    async fn draft(&self, post: &RawPost, p: &Profile) -> (String, String) {
+    async fn draft(&self, post: &RawPost, p: &Settings, name: &str, email: &str) -> (String, String) {
         let channel = post.apply.kind();
         let prompt = format!(
             "You are helping {name} apply to a job. Write a short, specific, \
@@ -57,7 +58,7 @@ impl Drafter for OllamaDrafter {
              Candidate skills: {skills}\n\
              Role: {title}\nCompany: {company}\n\
              Post:\n{body}\n\nMessage:",
-            name = p.name,
+            name = name,
             skills = p.keywords.join(", "),
             title = post.title,
             company = post.company,
@@ -90,7 +91,7 @@ impl Drafter for OllamaDrafter {
             }
             _ => {
                 tracing::warn!("ollama draft failed; using template");
-                self.fallback.draft(post, p).await
+                self.fallback.draft(post, p, name, email).await
             }
         }
     }

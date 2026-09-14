@@ -1,18 +1,18 @@
-use crate::config::Profile;
 use crate::model::RawPost;
+use crate::settings::Settings;
 
 /// Match scoring is a swappable trait. The default is a fast, zero-dependency
 /// lexical scorer — good enough to drive the pipeline. To upgrade, implement
 /// `Scorer` with fastembed cosine similarity or an LLM call and drop it in.
 pub trait Scorer: Send + Sync {
     /// Returns a 0..100 match score (freshness is applied separately).
-    fn score(&self, post: &RawPost, p: &Profile) -> f64;
+    fn score(&self, post: &RawPost, p: &Settings) -> f64;
 }
 
 pub struct LexicalScorer;
 
 impl Scorer for LexicalScorer {
-    fn score(&self, post: &RawPost, p: &Profile) -> f64 {
+    fn score(&self, post: &RawPost, p: &Settings) -> f64 {
         let title = post.title.to_lowercase();
         let hay = post.haystack();
 

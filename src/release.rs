@@ -11,7 +11,8 @@ use std::collections::HashMap;
 /// It is idempotent and safe to call concurrently — DB `mark_fired` enforces
 /// exactly-once via a UNIQUE constraint, so a race just no-ops the loser.
 pub async fn run(state: &AppState) -> anyhow::Result<()> {
-    let rel = &state.cfg.release;
+    let live = state.settings().await;
+    let rel = live.as_ref();
 
     // 1. Retire anything that aged out without ever firing.
     let expired = db::expire_stale(&state.pool).await?;
@@ -66,7 +67,10 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
         let mut cand = cand;
         if cand.draft_body.is_none() {
             let post = to_raw(&cand);
-            let (subject, body) = state.drafter.draft(&post, &state.cfg.profile).await;
+            let (subject, body) = state
+                .drafter
+                .draft(&post, rel, &state.cfg.profile.name, &state.cfg.profile.email)
+                .await;
             db::set_draft(&state.pool, cand.id, &subject, &body).await?;
             cand.draft_subject = Some(subject);
             cand.draft_body = Some(body);
@@ -103,7 +107,7 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
 
 /// Linearly relax the required score from `adaptive_start` at :00 to
 /// `adaptive_end` at :59. Disabled => a flat `strong_min` bar.
-fn adaptive_bar(rel: &crate::config::ReleaseCfg) -> f64 {
+fn adaptive_bar(rel: &crate::settings::Settings) -> f64 {
     if !rel.adaptive_threshold {
         return rel.strong_min;
     }

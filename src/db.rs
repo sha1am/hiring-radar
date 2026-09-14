@@ -50,6 +50,13 @@ const SCHEMA: &[&str] = &[
         first_seen INTEGER NOT NULL,
         backfilled INTEGER NOT NULL DEFAULT 0
     )",
+    // Runtime settings: one row, JSON. config.toml is read-only in the
+    // container, so this is where live edits land.
+    "CREATE TABLE IF NOT EXISTS settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    )",
     "CREATE TABLE IF NOT EXISTS feedback (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         candidate_id INTEGER NOT NULL,
@@ -75,6 +82,39 @@ pub async fn connect(url: &str) -> anyhow::Result<SqlitePool> {
         sqlx::query(stmt).execute(&pool).await?;
     }
     Ok(pool)
+}
+
+/// The stored settings row, or None on a fresh database.
+pub async fn load_settings(pool: &SqlitePool) -> anyhow::Result<Option<crate::settings::Settings>> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT json FROM settings WHERE id = 1")
+        .fetch_optional(pool)
+        .await?;
+    let Some((json,)) = row else { return Ok(None) };
+    match serde_json::from_str(&json) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) => {
+            // A settings row we can't parse must not take the process down —
+            // fall back to the config.toml seed and say so loudly.
+            tracing::error!(%e, "stored settings unreadable; falling back to config.toml");
+            Ok(None)
+        }
+    }
+}
+
+pub async fn save_settings(
+    pool: &SqlitePool,
+    s: &crate::settings::Settings,
+) -> anyhow::Result<()> {
+    let json = serde_json::to_string(s)?;
+    sqlx::query(
+        "INSERT INTO settings (id, json, updated_at) VALUES (1, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at",
+    )
+    .bind(json)
+    .bind(now())
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// How many URNs we've already recorded for a source. Zero => first run => bootstrap.
