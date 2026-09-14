@@ -2,7 +2,12 @@ services:
   radar:
     build: .
     image: hiring-radar:latest
-    container_name: hiring-radar
+    # No container_name on purpose. A fixed container_name is GLOBAL to the
+    # docker daemon, not scoped to this project, so renaming the directory (or
+    # running a second copy) collides with the container the old project still
+    # holds — "the container name /hiring-radar is already in use". Letting
+    # compose name it <project>-radar-1 keeps `docker compose logs -f` and
+    # every other compose command working, and can never conflict.
     restart: unless-stopped
 
     # Published to loopback only. The process inside binds 0.0.0.0 because it

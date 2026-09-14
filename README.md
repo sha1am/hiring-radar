@@ -30,6 +30,12 @@ State — the queue, the seen-set, the rolling budget, your settings and the
 resume — lives on a named volume at `/data`, so it survives
 `docker compose down`.
 
+Both the volume and the container are named after the directory this repo sits
+in, so **renaming or moving the directory starts you on a fresh, empty volume**.
+The old one is still there under the old name (`docker volume ls`) — nothing is
+lost, but the new instance bootstraps from scratch. That is usually what you
+want after a rename; if not, copy the old volume across before starting.
+
 > **The dashboard has no authentication.** The process inside the container
 > binds `0.0.0.0` because it must, and compose publishes to `127.0.0.1` only.
 > That loopback binding is the only thing standing between the internet and a
