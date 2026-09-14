@@ -145,6 +145,8 @@ pub struct Candidate {
     pub draft_subject: Option<String>,
     pub draft_body: Option<String>,
     pub notified_at: Option<i64>,
+    /// The resume terms that drove this match, for "why did this fire".
+    pub match_terms: Option<String>,
 }
 
 impl Candidate {

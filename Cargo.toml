@@ -6,7 +6,7 @@ description = "Self-hosted LinkedIn hiring-post radar: detect -> classify -> sco
 
 [dependencies]
 tokio = { version = "1.38", features = ["full"] }
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.7", features = ["macros", "multipart"] }
 tower-http = { version = "0.5", features = ["trace"] }
 sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros"] }
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
@@ -26,6 +26,9 @@ toml = "0.8"
 # RFC3339 / date parsing for source-reported post timestamps. No "clock"
 # feature: we only parse, never read the local zone.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+# Pure-Rust PDF text extraction for resume upload. Text-layer only: a scanned
+# resume yields nothing, which the UI reports rather than silently accepting.
+pdf-extract = "0.7"
 
 [profile.release]
 lto = "thin"

@@ -27,7 +27,17 @@ const SCHEMA: &[&str] = &[
         apply_target TEXT,
         draft_subject TEXT,
         draft_body TEXT,
-        notified_at INTEGER
+        notified_at INTEGER,
+        match_terms TEXT
+    )",
+    // Persisted IDF corpus, so a restart doesn't start from a flat idf of 1.
+    "CREATE TABLE IF NOT EXISTS corpus_terms (
+        term TEXT PRIMARY KEY,
+        df INTEGER NOT NULL
+    )",
+    "CREATE TABLE IF NOT EXISTS corpus_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        docs INTEGER NOT NULL
     )",
     "CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status, priority DESC)",
     // The radar view filters on effective post time across every status.
@@ -65,6 +75,9 @@ const SCHEMA: &[&str] = &[
     )",
 ];
 
+/// Applied on every boot, failures ignored — see connect().
+const MIGRATIONS: &[&str] = &["ALTER TABLE candidates ADD COLUMN match_terms TEXT"];
+
 pub async fn connect(url: &str) -> anyhow::Result<SqlitePool> {
     // WAL matters here: N crawl loops, the release ticker and every web handler
     // write through one pool. In rollback-journal mode a writer also blocks
@@ -81,7 +94,64 @@ pub async fn connect(url: &str) -> anyhow::Result<SqlitePool> {
     for stmt in SCHEMA {
         sqlx::query(stmt).execute(&pool).await?;
     }
+    // Additive migrations for databases created before a column existed.
+    // SQLite has no ADD COLUMN IF NOT EXISTS, so a duplicate-column error here
+    // is the expected "already migrated" case, not a failure.
+    for stmt in MIGRATIONS {
+        if let Err(e) = sqlx::query(stmt).execute(&pool).await {
+            tracing::debug!(%e, stmt, "migration skipped (already applied?)");
+        }
+    }
     Ok(pool)
+}
+
+/// Load the persisted IDF corpus.
+pub async fn load_corpus(pool: &SqlitePool) -> anyhow::Result<crate::resume::Corpus> {
+    let mut c = crate::resume::Corpus::default();
+    let docs: Option<(i64,)> = sqlx::query_as("SELECT docs FROM corpus_meta WHERE id = 1")
+        .fetch_optional(pool)
+        .await?;
+    c.docs = docs.map(|(d,)| d.max(0) as u64).unwrap_or(0);
+    let rows: Vec<(String, i64)> = sqlx::query_as("SELECT term, df FROM corpus_terms")
+        .fetch_all(pool)
+        .await?;
+    for (t, df) in rows {
+        c.df.insert(t, df.max(0) as u64);
+    }
+    Ok(c)
+}
+
+/// Persist the corpus. Only terms seen at least `min_df` times are written:
+/// singletons are most of the map and carry no discriminative weight yet, so
+/// storing them would multiply the write for no ranking benefit.
+pub async fn save_corpus(
+    pool: &SqlitePool,
+    c: &crate::resume::Corpus,
+    min_df: u64,
+) -> anyhow::Result<usize> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO corpus_meta (id, docs) VALUES (1, ?)
+         ON CONFLICT(id) DO UPDATE SET docs = excluded.docs",
+    )
+    .bind(c.docs as i64)
+    .execute(&mut *tx)
+    .await?;
+
+    let mut written = 0usize;
+    for (term, df) in c.df.iter().filter(|(_, d)| **d >= min_df) {
+        sqlx::query(
+            "INSERT INTO corpus_terms (term, df) VALUES (?, ?)
+             ON CONFLICT(term) DO UPDATE SET df = excluded.df",
+        )
+        .bind(term)
+        .bind(*df as i64)
+        .execute(&mut *tx)
+        .await?;
+        written += 1;
+    }
+    tx.commit().await?;
+    Ok(written)
 }
 
 /// The stored settings row, or None on a fresh database.
@@ -166,6 +236,7 @@ pub struct NewCandidate {
     pub apply_target: Option<String>,
     pub draft_subject: Option<String>,
     pub draft_body: Option<String>,
+    pub match_terms: Option<String>,
 }
 
 /// `status` is 'scored' for live detections and 'backfilled' for the first
@@ -181,8 +252,8 @@ pub async fn insert_candidate(
         "INSERT INTO candidates
          (urn, source, url, title, company, location, body, score, priority, tier, status,
           detected_at, posted_at, expires_at, settle_until, apply_kind, apply_target,
-          draft_subject, draft_body)
-         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?)
+          draft_subject, draft_body, match_terms)
+         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?)
          ON CONFLICT(urn) DO NOTHING",
     )
     .bind(&c.urn)
@@ -204,6 +275,7 @@ pub async fn insert_candidate(
     .bind(&c.apply_target)
     .bind(&c.draft_subject)
     .bind(&c.draft_body)
+    .bind(&c.match_terms)
     .execute(pool)
     .await?;
     Ok(())

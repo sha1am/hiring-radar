@@ -6,6 +6,7 @@ mod model;
 mod notify;
 mod pipeline;
 mod release;
+mod resume;
 mod score;
 mod sources;
 mod settings;
@@ -67,6 +68,21 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Rehydrate the IDF corpus and vectorise the stored resume before any
+    // crawl runs, so the first post scored after a restart is scored against
+    // the same corpus as the last post before it.
+    let mut matcher = resume::Matcher {
+        corpus: db::load_corpus(&pool).await.unwrap_or_default(),
+        resume: None,
+    };
+    matcher.rebuild_resume(&live.resume);
+    tracing::info!(
+        corpus_docs = matcher.corpus.docs,
+        corpus_terms = matcher.corpus.df.len(),
+        resume = matcher.resume.is_some(),
+        "matcher ready"
+    );
+
     let state = AppState {
         pool: pool.clone(),
         cfg: cfg.clone(),
@@ -74,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
         drafter,
         events,
         settings: Arc::new(tokio::sync::RwLock::new(Arc::new(live))),
+        matcher: Arc::new(tokio::sync::RwLock::new(Arc::new(matcher))),
     };
 
     // ---- assemble sources ----
@@ -114,6 +131,23 @@ async fn main() -> anyhow::Result<()> {
                 iv.tick().await;
                 if let Err(e) = release::run(&st).await {
                     tracing::warn!(%e, "release tick failed");
+                }
+            }
+        });
+    }
+
+    // ---- persist the IDF corpus periodically ----
+    {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mut iv = tokio::time::interval(Duration::from_secs(900));
+            iv.tick().await; // the immediate first tick would write an empty corpus
+            loop {
+                iv.tick().await;
+                let m = st.matcher().await;
+                match db::save_corpus(&st.pool, &m.corpus, 3).await {
+                    Ok(n) => tracing::debug!(terms = n, docs = m.corpus.docs, "corpus persisted"),
+                    Err(e) => tracing::warn!(%e, "corpus persist failed"),
                 }
             }
         });

@@ -3,7 +3,7 @@ use crate::model::Candidate;
 use crate::notify;
 use crate::settings::{parse_list, Query as LiQuery, Settings};
 use crate::state::AppState;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
@@ -29,6 +29,12 @@ pub fn router(state: AppState) -> Router {
         .route("/candidate/:id/applied", post(applied))
         .route("/candidate/:id/draft", post(save_draft))
         .route("/settings", get(settings_page).post(settings_save))
+        .route(
+            "/settings/resume",
+            // A PDF resume comfortably exceeds axum's 2MB default.
+            post(resume_upload).layer(DefaultBodyLimit::max(20 * 1024 * 1024)),
+        )
+        .route("/settings/resume/clear", post(resume_clear))
         .with_state(state)
 }
 
@@ -174,6 +180,19 @@ fn source_label(source: &str) -> &str {
     }
 }
 
+/// Why this post scored. With a resume loaded these are the resume terms the
+/// post actually hit — the difference between "94" and "94, because it wants
+/// exactly the Kafka and Kubernetes work you've been doing".
+fn why_matched(c: &Candidate) -> String {
+    match c.match_terms.as_deref().filter(|t| !t.trim().is_empty()) {
+        Some(t) => format!(
+            r##"<p class="mt-2 text-xs text-slate-500">Matched your resume on <span class="text-slate-400">{}</span></p>"##,
+            esc(t)
+        ),
+        None => String::new(),
+    }
+}
+
 fn card(c: &Candidate) -> String {
     let draft_subject = esc(c.draft_subject.as_deref().unwrap_or(""));
     let draft_body = esc(c.draft_body.as_deref().unwrap_or(""));
@@ -224,6 +243,7 @@ fn card(c: &Candidate) -> String {
       <span class="text-sm font-mono text-slate-300">{score:.0}</span>
     </div>
   </div>
+  {why}
   <form hx-post="/candidate/{id}/send" hx-target="#queue" hx-swap="outerHTML" class="mt-3">
     {subject_field}
     <textarea id="body-{id}" name="body" rows="6"
@@ -247,6 +267,7 @@ fn card(c: &Candidate) -> String {
         company = esc(&c.company),
         loc = loc,
         age = esc(&c.age_str()),
+        why = why_matched(c),
         badge = tier_badge(&c.tier),
         tier = c.tier,
         score = c.score,
@@ -289,7 +310,7 @@ fn radar_row(c: &Candidate) -> String {
   <span class="w-1.5 h-1.5 rounded-full shrink-0 {dot}"></span>
   <a href="{url}" target="_blank" rel="noopener noreferrer" class="min-w-0 flex-1 group">
     <span class="block truncate text-slate-200 group-hover:text-white">{title}</span>
-    <span class="block truncate text-xs text-slate-500">{company}{loc} &middot; {source}</span>
+    <span class="block truncate text-xs text-slate-500">{company}{loc} &middot; {source}{why}</span>
   </a>
   <span class="shrink-0 text-xs text-slate-500 tabular-nums">{age}</span>
   <span class="shrink-0 text-[10px] uppercase px-1.5 py-0.5 rounded ring-1 {chip_class}">{chip}</span>
@@ -317,6 +338,12 @@ fn radar_row(c: &Candidate) -> String {
             .map(|l| format!(" &middot; {}", esc(l)))
             .unwrap_or_default(),
         source = esc(source_label(&c.source)),
+        why = c
+            .match_terms
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| format!(" &middot; <span class=\"text-slate-600\">{}</span>", esc(t)))
+            .unwrap_or_default(),
         age = esc(&c.age_str()),
         chip_class = chip_class,
         chip = chip,
@@ -513,6 +540,7 @@ struct SettingsForm {
     voyager_enabled: Option<String>,
 
     radar_hours: Option<String>,
+    resume_weight: Option<String>,
 }
 
 fn num<T: std::str::FromStr>(v: &Option<String>, current: T) -> T {
@@ -527,9 +555,35 @@ fn checked(v: &Option<String>) -> bool {
     v.is_some()
 }
 
-async fn settings_page(State(st): State<AppState>) -> impl IntoResponse {
+/// Renders settings with the resume signals the matcher actually derived,
+/// which needs both the settings snapshot and the matcher.
+async fn render_settings(st: &AppState, note: Option<Result<&str, &str>>) -> String {
     let s = st.settings().await;
-    Html(settings_shell(&s, None))
+    let m = st.matcher().await;
+    let derived = m.resume.as_ref().map(|p| p.top_terms(14)).unwrap_or_default();
+    settings_shell(&s, note, &derived)
+}
+
+async fn settings_page(State(st): State<AppState>) -> impl IntoResponse {
+    Html(render_settings(&st, None).await)
+}
+
+/// 0..100 in the form, 0..1 in storage — a percentage is what a person can
+/// reason about when balancing "my resume" against "my keyword list".
+fn weight_slider(s: &Settings) -> String {
+    if s.resume.trim().is_empty() {
+        return String::new();
+    }
+    format!(
+        r##"<label class="block pt-1">
+  <span class="block text-sm text-slate-300">Resume weight: <span class="font-mono text-slate-100">{pct}%</span></span>
+  <span class="block text-xs text-slate-500 mb-1">How much of the content score comes from resume similarity rather than your keyword list. 0% ignores the resume entirely.</span>
+  <input type="range" min="0" max="100" step="5" name="resume_weight" value="{pct}"
+    oninput="this.previousElementSibling.previousElementSibling.querySelector('span').textContent=this.value+'%'"
+    class="w-full"/>
+</label>"##,
+        pct = (s.resume_weight * 100.0).round() as i64
+    )
 }
 
 async fn settings_save(
@@ -594,6 +648,10 @@ async fn settings_save(
     }
     s.voyager_enabled = checked(&f.voyager_enabled);
     s.radar_hours = num(&f.radar_hours, s.radar_hours);
+    // The slider posts 0..100 for usability; stored as a 0..1 fraction.
+    if f.resume_weight.is_some() {
+        s.resume_weight = num(&f.resume_weight, s.resume_weight * 100.0) / 100.0;
+    }
 
     // Clamp before anything else sees it — the engine must never run on a
     // hand-posted form that inverts the tier ladder or zeroes the cap.
@@ -601,7 +659,9 @@ async fn settings_save(
 
     let note = match db::save_settings(&st.pool, &s).await {
         Ok(_) => {
+            let resume = s.resume.clone();
             st.set_settings(s.clone()).await;
+            st.rebuild_resume(&resume).await;
             st.notify_ui();
             tracing::info!("settings updated from dashboard");
             Some(Ok("Saved. Changes apply on the next crawl and the next release tick."))
@@ -614,8 +674,7 @@ async fn settings_save(
 
     // Re-render from what was actually stored, so clamped values are visible
     // rather than the raw numbers the user typed.
-    let shown = st.settings().await;
-    Html(settings_shell(&shown, note))
+    Html(render_settings(&st, note).await)
 }
 
 fn ta(name: &str, label: &str, hint: &str, val: &[String], rows: usize) -> String {
@@ -660,7 +719,7 @@ fn check(name: &str, label: &str, on: bool) -> String {
     )
 }
 
-fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>) -> String {
+fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[String]) -> String {
     let banner = match note {
         Some(Ok(m)) => format!(
             r##"<div class="mb-4 rounded-md bg-emerald-500/10 ring-1 ring-emerald-500/30 text-emerald-300 px-3 py-2 text-sm">{}</div>"##,
@@ -711,7 +770,10 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>) -> String {
         {remote}
         {minsal}
       </div>
+      {weight}
     </section>
+
+    {resume}
 
     <section class="space-y-3">
       <h2 class="text-sm uppercase tracking-wide text-slate-400">Sources</h2>
@@ -752,6 +814,8 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>) -> String {
 </body>
 </html>"##,
         banner = banner,
+        resume = resume_section(s, derived),
+        weight = weight_slider(s),
         titles = ta("titles", "Target titles", "One per line. Matched against the job title; a full match is the strongest single signal.", &s.titles, 5),
         keywords = ta("keywords", "Skills / keywords", "One per line. Coverage across the post body.", &s.keywords, 5),
         locations = ta("locations", "Locations", "One per line. Matched against the listing location and body.", &s.locations, 4),
@@ -775,5 +839,177 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>) -> String {
         adaptive = check("adaptive_threshold", "Relax the bar as the hour drains", s.adaptive_threshold),
         astart = numf("adaptive_start", "Bar at :00", format!("{:.0}", s.adaptive_start), "1"),
         aend = numf("adaptive_end", "Bar at :59", format!("{:.0}", s.adaptive_end), "1"),
+    )
+}
+
+
+// ===================== resume intake =====================
+
+/// Accepts either an uploaded file or pasted text, whichever the multipart body
+/// carries. PDF goes through a text-layer extractor: a scanned resume yields
+/// nothing, and that is reported rather than silently storing an empty string
+/// and leaving similarity scoring mysteriously inert.
+async fn resume_upload(State(st): State<AppState>, mut mp: Multipart) -> impl IntoResponse {
+    let mut text = String::new();
+    let mut filename: Option<String> = None;
+    let mut err: Option<String> = None;
+
+    while let Ok(Some(field)) = mp.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        let fname = field.file_name().map(|s| s.to_string());
+
+        match name.as_str() {
+            "text" => {
+                if let Ok(v) = field.text().await {
+                    if !v.trim().is_empty() {
+                        text = v;
+                        filename = Some("pasted".into());
+                    }
+                }
+            }
+            "file" => {
+                let Ok(bytes) = field.bytes().await else { continue };
+                if bytes.is_empty() {
+                    continue;
+                }
+                let looks_pdf = bytes.starts_with(b"%PDF");
+                if looks_pdf {
+                    // extract_text_from_mem panics on some malformed files
+                    // rather than returning Err, so it runs inside catch_unwind.
+                    let parsed = std::panic::catch_unwind(|| {
+                        pdf_extract::extract_text_from_mem(&bytes)
+                    });
+                    match parsed {
+                        Ok(Ok(t)) if t.trim().len() > 100 => {
+                            text = t;
+                            filename = fname;
+                        }
+                        Ok(Ok(_)) => {
+                            err = Some(
+                                "That PDF has no extractable text — it's probably a scan. \
+                                 Paste the text instead."
+                                    .into(),
+                            );
+                        }
+                        _ => {
+                            err = Some("Could not read that PDF. Paste the text instead.".into());
+                        }
+                    }
+                } else {
+                    match String::from_utf8(bytes.to_vec()) {
+                        Ok(t) if t.trim().len() > 100 => {
+                            text = t;
+                            filename = fname;
+                        }
+                        Ok(_) => err = Some("That file looks empty.".into()),
+                        Err(_) => {
+                            err = Some(
+                                "Only PDF and plain text are supported. For .docx, paste the text."
+                                    .into(),
+                            )
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if text.trim().is_empty() {
+        let msg: String =
+            err.unwrap_or_else(|| "Nothing to read — choose a file or paste text.".into());
+        return Html(render_settings(&st, Some(Err(&msg))).await);
+    }
+
+    let mut s = (*st.settings().await).clone();
+    s.resume = text;
+    s.resume_filename = filename;
+    s.resume_updated_at = Some(crate::model::now());
+    s.sanitize();
+
+    let note = match db::save_settings(&st.pool, &s).await {
+        Ok(_) => {
+            let resume = s.resume.clone();
+            st.set_settings(s.clone()).await;
+            st.rebuild_resume(&resume).await;
+            let m = st.matcher().await;
+            match m.resume.as_ref() {
+                Some(p) => Ok::<String, String>(format!(
+                    "Resume loaded ({} characters). Top signals: {}.",
+                    resume.len(),
+                    p.top_terms(8).join(", ")
+                )),
+                None => Err("Read the file, but it was too short to build a profile from.".into()),
+            }
+        }
+        Err(e) => {
+            tracing::error!(%e, "resume save failed");
+            Err("Could not write the resume to the database.".into())
+        }
+    };
+
+    match note {
+        Ok(m) => Html(render_settings(&st, Some(Ok(&m))).await),
+        Err(m) => Html(render_settings(&st, Some(Err(&m))).await),
+    }
+}
+
+async fn resume_clear(State(st): State<AppState>) -> impl IntoResponse {
+    let mut s = (*st.settings().await).clone();
+    s.resume.clear();
+    s.resume_filename = None;
+    s.resume_updated_at = None;
+    let _ = db::save_settings(&st.pool, &s).await;
+    st.set_settings(s).await;
+    st.rebuild_resume("").await;
+    Html(render_settings(&st, Some(Ok("Resume cleared — scoring is back to your keyword list."))).await)
+}
+
+fn resume_section(s: &Settings, derived: &[String]) -> String {
+    let status = if s.resume.trim().is_empty() {
+        r##"<p class="text-sm text-slate-400">No resume loaded. Scoring is using your keyword list.</p>"##.to_string()
+    } else {
+        format!(
+            r##"<div class="rounded-md bg-slate-900/60 ring-1 ring-slate-700/60 p-3 space-y-2">
+  <p class="text-sm text-slate-300">Loaded: <span class="font-mono text-slate-100">{name}</span>
+     <span class="text-slate-500">&middot; {chars} characters</span></p>
+  <p class="text-xs text-slate-500">Signals derived from it: <span class="text-slate-400">{terms}</span></p>
+  <form method="post" action="/settings/resume/clear">
+    <button type="submit" class="text-xs text-rose-400 hover:text-rose-300">Remove resume</button>
+  </form>
+</div>"##,
+            name = esc(s.resume_filename.as_deref().unwrap_or("resume")),
+            chars = s.resume.len(),
+            terms = if derived.is_empty() {
+                "(not enough text to build a profile)".to_string()
+            } else {
+                esc(&derived.join(", "))
+            }
+        )
+    };
+
+    format!(
+        r##"<section class="space-y-3">
+  <h2 class="text-sm uppercase tracking-wide text-slate-400">Your resume</h2>
+  <p class="text-xs text-slate-500">With a resume loaded, posts are scored by how much they look like
+     <em>your</em> work &mdash; IDF-weighted similarity over the posts this instance has seen &mdash;
+     instead of by a hand-maintained keyword list. Nothing leaves the container.</p>
+  {status}
+  <form method="post" action="/settings/resume" enctype="multipart/form-data" class="space-y-2">
+    <label class="block">
+      <span class="block text-sm text-slate-300">Upload a PDF or .txt</span>
+      <input type="file" name="file" accept=".pdf,.txt,.md,text/plain,application/pdf"
+        class="mt-1 block w-full text-sm text-slate-400 file:mr-3 file:rounded-md file:border-0 file:bg-slate-700 file:px-3 file:py-1.5 file:text-sm file:text-slate-200"/>
+      <span class="block text-xs text-slate-500 mt-1">Text-layer PDFs only &mdash; a scan has nothing to read. For .docx, paste below.</span>
+    </label>
+    <label class="block">
+      <span class="block text-sm text-slate-300">&hellip; or paste the text</span>
+      <textarea name="text" rows="6" placeholder="Paste your resume here"
+        class="w-full rounded-md bg-slate-900/60 border border-slate-700 px-3 py-2 text-sm"></textarea>
+    </label>
+    <button type="submit" class="rounded-md bg-sky-500/90 hover:bg-sky-400 px-3 py-1.5 text-sm font-medium text-slate-900">Load resume</button>
+  </form>
+</section>"##,
+        status = status
     )
 }

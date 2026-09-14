@@ -1,4 +1,5 @@
 use crate::model::{now, RawPost, Tier};
+use crate::resume::tokenize;
 use crate::score::{priority, LexicalScorer, Scorer};
 use crate::state::AppState;
 use crate::{classify, db};
@@ -20,9 +21,14 @@ pub async fn ingest(state: &AppState, post: RawPost, backfill: bool) -> anyhow::
     // against one profile and tier it against another.
     let live = state.settings().await;
 
-    // 2. Score against the profile.
+    // 2. Score against the profile + resume.
+    let matcher = state.matcher().await;
     let scorer = LexicalScorer;
-    let score = scorer.score(&post, &live);
+    let (score, matched) = scorer.score(&post, &live, &matcher);
+
+    // Every classified post feeds the IDF corpus, including ones about to be
+    // dropped — a post we don't want still tells us which terms are common.
+    state.observe_corpus(&tokenize(&post.haystack())).await;
 
     // 3. Tier — below the floor is dropped entirely (never stored).
     let Some(tier) = Tier::from_score(score, &live) else {
@@ -62,6 +68,7 @@ pub async fn ingest(state: &AppState, post: RawPost, backfill: bool) -> anyhow::
         posted_at: post.posted_at,
         expires_at,
         settle_until,
+        match_terms: if matched.is_empty() { None } else { Some(matched.join(", ")) },
         apply_kind: post.apply.kind().to_string(),
         apply_target: post.apply.target(),
         draft_subject,
