@@ -141,6 +141,36 @@ shape, so you can correct the field names in `looks_like_post` instead of
 guessing. 401/403 means the cookie expired; 400 means the queryId or variables
 were rejected.
 
+## Location
+
+`locations` used to be worth ten points out of a hundred, which meant it never
+actually decided anything: a San Francisco role with a strong resume match
+cleared the floor and alerted anyway. Settings → **Location matching** now
+chooses how hard the list bites:
+
+- **Only these locations** — anything elsewhere is discarded outright, like a
+  dealbreaker. This is what "only send me India jobs" has to mean.
+- **Prefer these locations** — the old behaviour: adds points, never decides.
+- **Ignore location** — score on the work alone.
+
+Place names are canonicalised on both sides, which matters more than it sounds:
+you write "Gurugram", the post says "Gurgaon"; you write "India", the post says
+"Bengaluru". Plain substring matching misses both, and under a hard filter it
+discards exactly the jobs you set the filter up to keep. A country therefore
+matches every city inside it, aliases resolve to one canonical name, and
+matching is whole-word so "Pune" does not match "Puneet".
+
+Feed posts state no location at all, so one is inferred from the post text
+before scoring — otherwise an India-only filter would silently pass every
+LinkedIn post for want of a value. When nothing can be determined, that is
+treated as its own case rather than as a miss: **Keep posts whose location I
+can't determine** decides it, because rejecting unknowns is defensible but does
+throw away real matches.
+
+Posts dropped this way are counted separately on the status panel
+("3 wrong location") rather than vanishing into the score-floor number, so
+turning the filter on never looks like the profile suddenly matching nothing.
+
 ## Settings
 
 `/settings` edits, live, with no restart:

@@ -532,6 +532,8 @@ struct SettingsForm {
     keywords: Option<String>,
     locations: Option<String>,
     remote_ok: Option<String>,
+    location_policy: Option<String>,
+    allow_unknown_location: Option<String>,
     seniority: Option<String>,
     dealbreakers: Option<String>,
     min_salary: Option<String>,
@@ -625,6 +627,10 @@ async fn settings_save(
         s.dealbreakers = parse_list(v);
     }
     s.remote_ok = checked(&f.remote_ok);
+    if let Some(v) = &f.location_policy {
+        s.location_policy = v.trim().to_string();
+    }
+    s.allow_unknown_location = checked(&f.allow_unknown_location);
     s.min_salary = f
         .min_salary
         .as_deref()
@@ -797,6 +803,71 @@ fn mode_picker(s: &Settings) -> String {
     )
 }
 
+/// How hard the location list bites.
+///
+/// This exists because "prefer" — the original and only behaviour — made
+/// location worth ten points out of a hundred, so a strong match somewhere else
+/// still cleared the floor and got alerted. Anyone who lists their cities means
+/// it as a filter at least some of the time.
+fn location_policy(s: &Settings) -> String {
+    let opt = |val: &str, title: &str, desc: &str| {
+        format!(
+            r##"<label class="flex items-start gap-2 rounded-md ring-1 px-3 py-2 cursor-pointer {sel}">
+  <input type="radio" name="location_policy" value="{val}" {on} class="mt-1"/>
+  <span>
+    <span class="block text-sm text-slate-200">{title}</span>
+    <span class="block text-xs text-slate-500">{desc}</span>
+  </span>
+</label>"##,
+            val = val,
+            title = esc(title),
+            desc = esc(desc),
+            on = if s.location_policy == val { "checked" } else { "" },
+            sel = if s.location_policy == val {
+                "bg-slate-800/60 ring-slate-600"
+            } else {
+                "ring-slate-800 hover:ring-slate-700"
+            }
+        )
+    };
+
+    // Only meaningful under "require", so don't show it otherwise.
+    let unknown = if s.location_policy == "require" {
+        format!(
+            r##"<div class="ml-3 mt-1">{}</div>"##,
+            check(
+                "allow_unknown_location",
+                "Keep posts whose location I can't determine",
+                s.allow_unknown_location
+            )
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        r##"<div class="space-y-2">
+  <span class="block text-sm text-slate-300">Location matching</span>
+  {require}
+  {prefer}
+  {off}
+  {unknown}
+</div>"##,
+        require = opt(
+            "require",
+            "Only these locations",
+            "Anything elsewhere is discarded outright, like a dealbreaker — this is what only-India actually means."
+        ),
+        prefer = opt(
+            "prefer",
+            "Prefer these locations",
+            "A location hit adds points but never decides. A strong match elsewhere can still alert you."
+        ),
+        off = opt("off", "Ignore location", "Score on the work alone."),
+        unknown = unknown,
+    )
+}
+
 fn check(name: &str, label: &str, on: bool) -> String {
     format!(
         r##"<label class="flex items-center gap-2 py-1">
@@ -858,6 +929,7 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
       {locations}
       {seniority}
       {dealbreakers}
+      {locpolicy}
       <div class="grid grid-cols-2 gap-3 items-end">
         {remote}
         {minsal}
@@ -919,9 +991,10 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
         weight = weight_slider(s),
         titles = ta("titles", "Target titles", "One per line. Matched against the job title; a full match is the strongest single signal.", &s.titles, 5),
         keywords = ta("keywords", "Skills / keywords", "One per line. Coverage across the post body.", &s.keywords, 5),
-        locations = ta("locations", "Locations", "One per line. Matched against the listing location and body.", &s.locations, 4),
+        locations = ta("locations", "Locations", "One per line. Matched against the listing's location field and its text \u{2014} and, for feed posts that state no location, against a place inferred from the post.", &s.locations, 4),
         seniority = ta("seniority", "Seniority", "One per line, e.g. senior, sde 2. Junior/intern titles are penalised when you want senior.", &s.seniority, 3),
         dealbreakers = ta("dealbreakers", "Dealbreakers", "One per line. Any hit zeroes the post outright — keep these specific.", &s.dealbreakers, 3),
+        locpolicy = location_policy(s),
         remote = check("remote_ok", "Remote roles count as a location match", s.remote_ok),
         minsal = numf("min_salary", "Min salary (optional, blank = ignore)", s.min_salary.map(|v| v.to_string()).unwrap_or_default(), "1"),
         mode = mode_picker(s),
@@ -1241,7 +1314,7 @@ async fn render_status(st: &AppState, hours: i64) -> String {
                     String::new()
                 } else {
                     format!(
-                        r##"<span class="text-slate-500">{fetched} fetched &middot; {new} new &middot; {stored} kept{dropped}{notmatch}</span>"##,
+                        r##"<span class="text-slate-500">{fetched} fetched &middot; {new} new &middot; {stored} kept{dropped}{wrongloc}{notmatch}</span>"##,
                         fetched = s.fetched,
                         new = s.new_posts,
                         stored = s.stored,
@@ -1252,6 +1325,11 @@ async fn render_status(st: &AppState, hours: i64) -> String {
                         },
                         notmatch = if s.not_hiring > 0 {
                             format!(" &middot; {} not hiring posts", s.not_hiring)
+                        } else {
+                            String::new()
+                        },
+                        wrongloc = if s.wrong_location > 0 {
+                            format!(" &middot; {} wrong location", s.wrong_location)
                         } else {
                             String::new()
                         },

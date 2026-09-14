@@ -26,7 +26,32 @@ pub async fn ingest(
     // against one profile and tier it against another.
     let live = state.settings().await;
 
-    // 2. Score against the profile + resume.
+    // Sources that report no location field (feed posts, most notably) get one
+    // inferred from their text. This has to happen BEFORE scoring, because the
+    // location filter and the dashboard both read post.location — otherwise
+    // "only India" silently lets every feed post through for want of a value.
+    let mut post = post;
+    if post
+        .location
+        .as_deref()
+        .map(|l| l.trim().is_empty())
+        .unwrap_or(true)
+    {
+        post.location = crate::geo::describe(&format!("{} {}", post.title, post.body));
+    }
+    let post = post;
+
+    // 2. Location gate. Runs before scoring so a post in the wrong place is
+    //    reported as exactly that, instead of surfacing as an unexplained zero.
+    if crate::score::location_verdict(&post, &live) == crate::score::LocationVerdict::Rejected {
+        tracing::debug!(
+            location = post.location.as_deref().unwrap_or("unknown"),
+            "dropped: outside configured locations"
+        );
+        return Ok(Outcome::WrongLocation);
+    }
+
+    // 3. Score against the profile + resume.
     let matcher = state.matcher().await;
     let scorer = LexicalScorer;
     let (score, matched) = scorer.score(&post, &live, &matcher);
@@ -35,7 +60,7 @@ pub async fn ingest(
     // dropped — a post we don't want still tells us which terms are common.
     state.observe_corpus(&tokenize(&post.haystack())).await;
 
-    // 3. Tier — below the floor is dropped entirely (never stored).
+    // 4. Tier — below the floor is dropped entirely (never stored).
     let Some(tier) = Tier::from_score(score, &live) else {
         return Ok(Outcome::BelowFloor { score });
     };
@@ -45,7 +70,7 @@ pub async fn ingest(
     let settle_until = detected + tier.settle_secs(&live);
     let expires_at = detected + live.candidate_ttl_secs;
 
-    // 4. Draft-ahead for anything that could fire, so the draft is ready on arrival.
+    // 5. Draft-ahead for anything that could fire, so the draft is ready on arrival.
     //    Backfill can't fire, so drafting it would be wasted work (and, with the
     //    ollama drafter, a very slow first crawl).
     let (draft_subject, draft_body) = if !backfill && matches!(tier, Tier::Exceptional | Tier::Strong) {

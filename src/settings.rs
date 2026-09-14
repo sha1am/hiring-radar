@@ -23,6 +23,21 @@ pub struct Settings {
     pub locations: Vec<String>,
     #[serde(default)]
     pub remote_ok: bool,
+    /// How much `locations` counts for.
+    ///
+    /// "prefer" is the original behaviour: a location hit is worth a few points
+    /// out of a hundred, which a strong match elsewhere trivially outweighs — so
+    /// "only send me jobs in India" was never actually enforced. "require" makes
+    /// it a gate: a post that is somewhere else is discarded outright, like a
+    /// dealbreaker. "off" ignores location entirely.
+    #[serde(default = "def_location_policy")]
+    pub location_policy: String,
+    /// Under "require", what to do with a post whose location cannot be
+    /// determined at all. Feed posts often never name a city, so rejecting
+    /// unknowns is defensible but will throw away real matches — hence a
+    /// separate switch rather than a hidden assumption.
+    #[serde(default = "def_true")]
+    pub allow_unknown_location: bool,
     #[serde(default)]
     pub seniority: Vec<String>,
     #[serde(default)]
@@ -115,6 +130,8 @@ fn def_adaptive_start() -> f64 { 82.0 }
 fn def_adaptive_end() -> f64 { 70.0 }
 fn def_radar_hours() -> i64 { 24 }
 fn def_mode() -> String { "all".into() }
+fn def_location_policy() -> String { "prefer".into() }
+fn def_true() -> bool { true }
 fn def_voyager_queries() -> Vec<String> {
     vec!["#hiring".into(), "#hiringnow".into(), "#nowhiring".into()]
 }
@@ -128,6 +145,8 @@ impl Settings {
             keywords: c.profile.keywords.clone(),
             locations: c.profile.locations.clone(),
             remote_ok: c.profile.remote_ok,
+            location_policy: def_location_policy(),
+            allow_unknown_location: true,
             seniority: c.profile.seniority.clone(),
             dealbreakers: c.profile.dealbreakers.clone(),
             min_salary: c.profile.min_salary,
@@ -193,6 +212,14 @@ impl Settings {
                 self.voyager_enabled = true;
             }
             _ => self.mode = "custom".into(),
+        }
+
+        if !matches!(self.location_policy.as_str(), "off" | "prefer" | "require") {
+            self.location_policy = def_location_policy();
+        }
+        // "require" with no locations listed would silently discard everything.
+        if self.location_policy == "require" && self.locations.is_empty() {
+            self.location_policy = "prefer".into();
         }
 
         for q in self.voyager_queries.iter_mut() {

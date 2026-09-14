@@ -81,19 +81,10 @@ impl Scorer for LexicalScorer {
         s += content_frac * content_budget;
 
         // --- location ---
-        let loc_hay = post
-            .location
-            .as_deref()
-            .map(|l| l.to_lowercase())
-            .unwrap_or_default();
-        let loc_text = format!("{loc_hay} {hay}");
-        let loc_match = p
-            .locations
-            .iter()
-            .any(|l| loc_text.contains(&l.to_lowercase()));
-        let remote_match =
-            p.remote_ok && (loc_text.contains("remote") || loc_text.contains("anywhere"));
-        if loc_match || remote_match {
+        // Rejection is the pipeline's call, not the scorer's — a post filtered
+        // out for being in the wrong place needs to be *reported* as that,
+        // rather than showing up as a mysteriously low score.
+        if location_verdict(post, p) == LocationVerdict::Match {
             s += LOCATION;
         }
 
@@ -127,6 +118,69 @@ impl Scorer for LexicalScorer {
         }
 
         (s.clamp(0.0, 100.0), matched)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum LocationVerdict {
+    /// Somewhere you want to work.
+    Match,
+    /// Somewhere else, or unknown — scored without the location bonus.
+    NoMatch,
+    /// Somewhere else, under a policy that says don't show me those at all.
+    Rejected,
+}
+
+/// Decide a post's location against the profile.
+///
+/// The whole point of "require" is that a location miss cannot be outvoted. As
+/// a bonus worth ten points out of a hundred, a San Francisco role with a
+/// perfect resume match still cleared the floor comfortably, which made "only
+/// send me jobs in India" a suggestion rather than a filter.
+pub fn location_verdict(post: &RawPost, p: &Settings) -> LocationVerdict {
+    if p.location_policy == "off" || p.locations.is_empty() {
+        return LocationVerdict::NoMatch;
+    }
+
+    let stated = post.location.as_deref().unwrap_or("");
+    let body = post.haystack();
+    // The stated field is authoritative when it names a place; the body is the
+    // fallback, which is why a listing whose location reads "Remote" but whose
+    // text says "India preferred" still resolves.
+    let place = crate::geo::lookup(stated).or_else(|| crate::geo::lookup(&body));
+
+    let hay = format!("{} {}", stated.to_lowercase(), body);
+
+    let matched = p.locations.iter().any(|wanted| {
+        // Canonical comparison first: it is what makes "Gurugram" match a post
+        // saying "Gurgaon", and "India" match a post in Bengaluru.
+        if let (Some(place), Some(wanted)) = (place, crate::geo::canonical(wanted)) {
+            if crate::geo::satisfies(place, wanted) {
+                return true;
+            }
+        }
+        // Fallback for anywhere the gazetteer has never heard of — a suburb, an
+        // office park, a country we do not list. Whole-word, so "pune" does not
+        // match "Puneet".
+        crate::geo::contains_word(&hay, &wanted.trim().to_lowercase())
+    });
+
+    let remote_match = p.remote_ok && crate::geo::is_remote(&hay);
+
+    if matched || remote_match {
+        return LocationVerdict::Match;
+    }
+    if p.location_policy != "require" {
+        return LocationVerdict::NoMatch;
+    }
+
+    // Under "require": did we fail to match, or fail to tell? Those deserve
+    // different treatment, and conflating them either floods the board with
+    // foreign roles or silently bins every feed post that never names a city.
+    if place.is_some() || !p.allow_unknown_location {
+        LocationVerdict::Rejected
+    } else {
+        LocationVerdict::NoMatch
     }
 }
 
@@ -311,6 +365,113 @@ mod tests {
         );
         let score = LexicalScorer.score(&junk, &p, &m).0;
         assert!(score < 40.0, "irrelevant feed post scored {score}");
+    }
+
+    fn india_profile(policy: &str) -> Settings {
+        let mut p = profile();
+        p.locations = vec!["india".into(), "bengaluru".into(), "gurugram".into()];
+        p.location_policy = policy.into();
+        p.remote_ok = false;
+        p
+    }
+
+    /// The behaviour that was actually missing: as a ten-point bonus, a strong
+    /// match in the wrong country still cleared the floor and alerted.
+    #[test]
+    fn prefer_lets_a_foreign_job_through_require_does_not() {
+        let m = Matcher::default();
+        let sf = RawPost {
+            location: Some("San Francisco, CA".into()),
+            ..post(
+                "Senior Backend Engineer",
+                "Golang, kafka, postgres, kubernetes. Distributed systems at scale.",
+                false,
+            )
+        };
+
+        let preferred = LexicalScorer.score(&sf, &india_profile("prefer"), &m).0;
+        assert!(
+            preferred > 55.0,
+            "under prefer a strong foreign match still scores well: {preferred}"
+        );
+        assert_eq!(
+            location_verdict(&sf, &india_profile("prefer")),
+            LocationVerdict::NoMatch
+        );
+        assert_eq!(
+            location_verdict(&sf, &india_profile("require")),
+            LocationVerdict::Rejected,
+            "require must reject it outright, not merely score it lower"
+        );
+    }
+
+    #[test]
+    fn require_keeps_indian_jobs() {
+        let blr = RawPost {
+            location: Some("Bengaluru, India".into()),
+            ..post("Senior Backend Engineer", "Golang and kafka.", false)
+        };
+        assert_eq!(
+            location_verdict(&blr, &india_profile("require")),
+            LocationVerdict::Match
+        );
+    }
+
+    /// Feed posts state no location field, so the pipeline infers one from the
+    /// text. Both directions have to work or the filter is useless there.
+    #[test]
+    fn require_reads_the_body_for_feed_posts() {
+        let p = india_profile("require");
+        let indian = post(
+            "We are hiring!",
+            "Our Gurgaon team is looking for a backend engineer. Golang, kafka.",
+            true,
+        );
+        let foreign = post(
+            "We are hiring!",
+            "Our Berlin office is looking for a backend engineer. Golang, kafka.",
+            true,
+        );
+        assert_eq!(location_verdict(&indian, &p), LocationVerdict::Match);
+        assert_eq!(location_verdict(&foreign, &p), LocationVerdict::Rejected);
+    }
+
+    /// A post that names no place at all is a judgement call, not a miss, so it
+    /// gets its own switch rather than a silent default.
+    #[test]
+    fn unknown_location_follows_its_own_switch() {
+        let unknown = post("We are hiring!", "Backend engineer wanted. Golang, kafka.", true);
+
+        let mut lenient = india_profile("require");
+        lenient.allow_unknown_location = true;
+        assert_eq!(location_verdict(&unknown, &lenient), LocationVerdict::NoMatch);
+
+        let mut strict = india_profile("require");
+        strict.allow_unknown_location = false;
+        assert_eq!(location_verdict(&unknown, &strict), LocationVerdict::Rejected);
+    }
+
+    #[test]
+    fn remote_counts_when_remote_is_acceptable() {
+        let mut p = india_profile("require");
+        p.remote_ok = true;
+        let remote = post(
+            "We are hiring!",
+            "Fully remote backend engineer role. Golang, kafka.",
+            true,
+        );
+        assert_eq!(location_verdict(&remote, &p), LocationVerdict::Match);
+    }
+
+    /// "require" with an empty location list would discard every post; sanitize
+    /// downgrades it rather than silently emptying the board.
+    #[test]
+    fn require_without_locations_is_downgraded() {
+        let mut p = profile();
+        p.locations.clear();
+        p.location_policy = "require".into();
+        p.sanitize();
+        assert_eq!(p.location_policy, "prefer");
     }
 
     #[test]

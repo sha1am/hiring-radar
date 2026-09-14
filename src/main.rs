@@ -2,6 +2,7 @@ mod classify;
 mod config;
 mod db;
 mod draft;
+mod geo;
 mod model;
 mod notify;
 mod pipeline;

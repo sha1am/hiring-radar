@@ -36,11 +36,13 @@ pub struct SourceStatus {
     pub stored: usize,
     pub not_hiring: usize,
     pub below_floor: usize,
+    pub wrong_location: usize,
 
     // --- cumulative ---
     pub total_fetched: u64,
     pub total_stored: u64,
     pub total_below_floor: u64,
+    pub total_wrong_location: u64,
     /// Best score seen from this source, ever. If this sits below your floor,
     /// the floor (or the profile) is the problem, not the source.
     pub best_score: f64,
@@ -55,6 +57,10 @@ impl SourceStatus {
                 self.best_score = self.best_score.max(*score);
             }
             Outcome::NotHiring => self.not_hiring += 1,
+            Outcome::WrongLocation => {
+                self.wrong_location += 1;
+                self.total_wrong_location += 1;
+            }
             Outcome::BelowFloor { score } => {
                 self.below_floor += 1;
                 self.total_below_floor += 1;
@@ -71,6 +77,7 @@ impl SourceStatus {
         self.stored = 0;
         self.not_hiring = 0;
         self.below_floor = 0;
+        self.wrong_location = 0;
         self.notes.clear();
         self.last_error = None;
     }
@@ -88,6 +95,10 @@ pub enum Outcome {
     Stored { score: f64 },
     NotHiring,
     BelowFloor { score: f64 },
+    /// Discarded by the location filter rather than by score. Counted
+    /// separately because otherwise turning on "only India" looks identical to
+    /// the profile suddenly matching nothing.
+    WrongLocation,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -149,6 +160,10 @@ impl Status {
 
     pub fn total_below_floor(&self) -> u64 {
         self.sources.values().map(|s| s.total_below_floor).sum()
+    }
+
+    pub fn total_wrong_location(&self) -> u64 {
+        self.sources.values().map(|s| s.total_wrong_location).sum()
     }
 
     pub fn total_fetched(&self) -> u64 {
@@ -215,6 +230,19 @@ pub fn diagnosis(st: &Status, floor: f64, rows_in_window: i64) -> (Level, String
             "Crawls are succeeding but returning no postings at all. Check your \
              board tokens and LinkedIn queries in Settings → Sources."
                 .into(),
+        );
+    }
+
+    if st.total_stored() == 0 && st.total_wrong_location() > 0 {
+        return (
+            Level::Warn,
+            format!(
+                "Crawled {} postings and discarded {} of them for being outside your \
+                 locations. Nothing was kept. Widen the locations, or set location \
+                 matching back to \"prefer\" in Settings.",
+                st.total_fetched(),
+                st.total_wrong_location()
+            ),
         );
     }
 
