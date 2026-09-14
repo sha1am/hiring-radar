@@ -16,7 +16,6 @@ lettre = { version = "0.11", default-features = false, features = ["smtp-transpo
 scraper = "0.19"
 blake3 = "1"
 anyhow = "1"
-thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.8"
@@ -24,6 +23,9 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 async-trait = "0.1"
 toml = "0.8"
+# RFC3339 / date parsing for source-reported post timestamps. No "clock"
+# feature: we only parse, never read the local zone.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [profile.release]
 lto = "thin"

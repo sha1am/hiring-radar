@@ -9,6 +9,7 @@ mod release;
 mod score;
 mod sources;
 mod state;
+mod timeparse;
 mod web;
 
 use crate::config::Config;

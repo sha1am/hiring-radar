@@ -1,7 +1,7 @@
 use crate::model::now;
 use crate::{db, notify};
 use crate::state::AppState;
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 /// The heart of the system. Detection continuously fills a scored pool; this
 /// function decides *who fires when a slot is free*, under a hard rolling-hour
@@ -31,8 +31,17 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
     let bar = adaptive_bar(rel);
 
     // 4. Walk the eligible pool best-first; fire until the budget or the pool runs out.
-    let pool = db::eligible(&state.pool).await?;
-    let mut chosen_companies: HashSet<String> = HashSet::new();
+    //    Ranking is recomputed here, not read from the stored column — see
+    //    Candidate::live_priority for why.
+    let mut pool = db::eligible(&state.pool).await?;
+    pool.sort_by(|a, b| {
+        b.live_priority()
+            .partial_cmp(&a.live_priority())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    // Per-company tally for THIS pass, so per_poster_cap > 1 is actually
+    // reachable. A HashSet here capped every company at one regardless of config.
+    let mut chosen_companies: HashMap<String, i64> = HashMap::new();
     let mut fired_any = false;
 
     for cand in pool {
@@ -46,12 +55,10 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
             continue;
         }
 
-        // Per-poster cap: across the trailing hour AND within this pass.
-        if chosen_companies.contains(&cand.company) {
-            continue;
-        }
+        // Per-poster cap: the trailing hour AND this pass count against it.
         let poster_prev = db::poster_used(&state.pool, &cand.company).await?;
-        if poster_prev >= rel.per_poster_cap {
+        let poster_pass = chosen_companies.get(&cand.company).copied().unwrap_or(0);
+        if poster_prev + poster_pass >= rel.per_poster_cap {
             continue;
         }
 
@@ -83,7 +90,7 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
             company = %cand.company, "FIRED: {}", cand.title
         );
 
-        chosen_companies.insert(cand.company.clone());
+        *chosen_companies.entry(cand.company.clone()).or_insert(0) += 1;
         remaining -= 1;
         fired_any = true;
     }
@@ -122,10 +129,16 @@ fn to_raw(c: &crate::model::Candidate) -> crate::model::RawPost {
 
 /// Hourly digest of marginal-tier matches. Small, separate from the instant path.
 pub async fn digest(state: &AppState) -> anyhow::Result<()> {
-    let batch = db::digest_batch(&state.pool, 10).await?;
+    let mut batch = db::digest_batch(&state.pool, 50).await?;
     if batch.is_empty() {
         return Ok(());
     }
+    batch.sort_by(|a, b| {
+        b.live_priority()
+            .partial_cmp(&a.live_priority())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    batch.truncate(10);
     notify::email_digest(&state.cfg, &batch).await?;
     let ids: Vec<i64> = batch.iter().map(|c| c.id).collect();
     db::mark_digested(&state.pool, &ids).await?;

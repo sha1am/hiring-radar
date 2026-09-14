@@ -1,5 +1,6 @@
 use super::JobSource;
 use crate::model::{ApplyChannel, RawPost};
+use crate::timeparse;
 use serde::Deserialize;
 
 /// Greenhouse exposes every company board as public JSON. No auth, no ban risk.
@@ -28,6 +29,14 @@ struct Job {
     location: Option<Loc>,
     #[serde(default)]
     content: String,
+    /// When the listing first went live. Present on most boards; this is the
+    /// field that actually means "posted".
+    #[serde(default)]
+    first_published: Option<String>,
+    /// Always present. Falls back here, accepting that an edited listing looks
+    /// newer than it is — still far better than treating every job as brand new.
+    #[serde(default)]
+    updated_at: Option<String>,
 }
 #[derive(Deserialize)]
 struct Loc {
@@ -85,6 +94,8 @@ impl JobSource for Greenhouse {
             };
             let company = pretty(board);
             for j in data.jobs {
+                let posted_at = timeparse::parse_opt(j.first_published.as_deref())
+                    .or_else(|| timeparse::parse_opt(j.updated_at.as_deref()));
                 posts.push(RawPost {
                     source: "greenhouse".into(),
                     external_id: format!("{board}:{}", j.id),
@@ -93,7 +104,7 @@ impl JobSource for Greenhouse {
                     company: company.clone(),
                     location: j.location.map(|l| l.name),
                     body: strip_html(&j.content),
-                    posted_at: None, // treated as fresh when first seen
+                    posted_at,
                     apply: ApplyChannel::ExternalUrl(j.absolute_url),
                 });
             }

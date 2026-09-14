@@ -1,6 +1,7 @@
 use super::JobSource;
 use crate::config::LinkedInQuery;
 use crate::model::{ApplyChannel, RawPost};
+use crate::timeparse;
 use scraper::{Html, Selector};
 
 /// The public "see more job postings" endpoint LinkedIn serves without login.
@@ -65,6 +66,9 @@ fn parse_cards(html: &str) -> Vec<RawPost> {
     let loc_sel = Selector::parse("span.job-search-card__location").unwrap();
     let link_sel = Selector::parse("a.base-card__full-link").unwrap();
     let base_sel = Selector::parse("div.base-card").unwrap();
+    // Guest cards carry the list date as <time datetime="YYYY-MM-DD">. Date
+    // granularity only, but it separates today's postings from last week's.
+    let time_sel = Selector::parse("time[datetime]").unwrap();
 
     let mut out = Vec::new();
     for li in doc.select(&card_sel) {
@@ -101,6 +105,12 @@ fn parse_cards(html: &str) -> Vec<RawPost> {
             .map(|s| s.to_string())
             .unwrap_or_else(|| url.clone());
 
+        let posted_at = li
+            .select(&time_sel)
+            .next()
+            .and_then(|e| e.value().attr("datetime"))
+            .and_then(timeparse::parse);
+
         if url.is_empty() {
             continue;
         }
@@ -114,7 +124,7 @@ fn parse_cards(html: &str) -> Vec<RawPost> {
             location,
             // Guest cards carry no description; title+company still score fine.
             body: String::new(),
-            posted_at: None,
+            posted_at,
             apply: ApplyChannel::ExternalUrl(url),
         });
     }

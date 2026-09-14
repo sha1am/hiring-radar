@@ -148,6 +148,18 @@ pub struct Candidate {
 }
 
 impl Candidate {
+    /// Freshness-weighted rank, evaluated NOW rather than at detection.
+    ///
+    /// The stored `priority` column is the value at insert time, when age is
+    /// always ~0 — so it equals `score` for every row and decays for none.
+    /// Ordering by it means an 11-hour-old rollover outranks a minute-old post
+    /// of equal match, which is the inversion the tiering exists to prevent.
+    /// Selection must therefore recompute; the column is kept only as a coarse
+    /// index for the pre-filter.
+    pub fn live_priority(&self) -> f64 {
+        crate::score::priority(self.score, self.posted_at, self.detected_at, now())
+    }
+
     pub fn apply(&self) -> ApplyChannel {
         ApplyChannel::from_parts(&self.apply_kind, self.apply_target.clone())
     }
