@@ -126,6 +126,15 @@ pub struct Settings {
     // ---- dashboard ----
     #[serde(default = "def_radar_hours")]
     pub radar_hours: i64,
+    /// Score at which a post is worth acting on, and so lands in the outbox
+    /// with a draft.
+    ///
+    /// Deliberately separate from the alert budget. The 4/hour cap limits how
+    /// often your phone buzzes; it should not limit how much you can work
+    /// through. Tying the two together means a busy morning silently hides
+    /// matches from you.
+    #[serde(default = "def_outbox_min")]
+    pub outbox_min: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -145,6 +154,7 @@ fn def_ttl() -> i64 { 43200 }
 fn def_adaptive_start() -> f64 { 82.0 }
 fn def_adaptive_end() -> f64 { 70.0 }
 fn def_radar_hours() -> i64 { 24 }
+fn def_outbox_min() -> f64 { 70.0 }
 fn def_mode() -> String { "all".into() }
 fn def_location_policy() -> String { "prefer".into() }
 fn def_lookback_hours() -> i64 { 24 }
@@ -207,6 +217,7 @@ impl Settings {
             voyager_poll_pages: def_poll_pages(),
 
             radar_hours: c.server.radar_hours,
+            outbox_min: def_outbox_min(),
         }
     }
 
@@ -265,6 +276,7 @@ impl Settings {
         self.adaptive_start = self.adaptive_start.clamp(self.adaptive_end, 100.0);
         self.resume_weight = self.resume_weight.clamp(0.0, 1.0);
         self.radar_hours = self.radar_hours.clamp(1, 24 * 30);
+        self.outbox_min = self.outbox_min.clamp(self.score_floor, 100.0);
 
         // Free-text lists: drop blanks, trim, lowercase, dedupe. These are all
         // matched case-insensitively, so storing mixed case just hides duplicates.

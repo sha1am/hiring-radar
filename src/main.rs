@@ -13,6 +13,8 @@ mod sources;
 mod settings;
 mod state;
 mod status;
+mod tags;
+mod text;
 mod timeparse;
 mod web;
 

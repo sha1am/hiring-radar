@@ -152,6 +152,9 @@ pub struct Candidate {
     pub notified_at: Option<i64>,
     /// The resume terms that drove this match, for "why did this fire".
     pub match_terms: Option<String>,
+    /// Technologies detected in the post, comma-delimited with leading and
+    /// trailing commas so a SQL containment test cannot prefix-match.
+    pub tags: Option<String>,
 }
 
 impl Candidate {

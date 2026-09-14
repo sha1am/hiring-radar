@@ -99,6 +99,7 @@ pub async fn ingest(
         expires_at,
         settle_until,
         match_terms: if matched.is_empty() { None } else { Some(matched.join(", ")) },
+        tags: crate::tags::encode(&crate::tags::extract(&post.haystack())),
         apply_kind: post.apply.kind().to_string(),
         apply_target: post.apply.target(),
         draft_subject,

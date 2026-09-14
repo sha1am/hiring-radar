@@ -99,6 +99,21 @@ It is deliberately not an LLM call: this runs on the instant path for every
 post, and the score you see has to be the one the release engine acted on.
 Nothing about your resume leaves the container.
 
+## The outbox
+
+Every post scoring at or above the **outbox bar** (Settings, default 70) gets a
+ready-to-edit draft and sits in `/outbox` until you send, apply or dismiss it.
+
+This is deliberately independent of the alert budget. The 4/hour cap limits how
+often your phone buzzes; it should not limit how much you can work through. A
+post that scored 88 on a busy morning is no less worth applying to for having
+missed a notification slot, and tying the two together is how a job-hunting tool
+quietly loses you the job.
+
+Backfilled posts are stored without a draft — drafting hundreds during the first
+crawl would stall it, badly so with a local LLM configured — so the outbox fills
+them in for what is actually on screen and persists them, which happens once.
+
 ## Filtering the board
 
 The radar has a filter bar: free text over title, company, place and the matched
@@ -114,6 +129,18 @@ filter that works.
 
 A filter matching nothing says so ("No match among the 328 in this window")
 rather than showing the same empty state as a board with nothing on it.
+
+Technology chips sit under the filter bar: Go, Kafka, Postgres and so on,
+extracted from each post at ingest and offered with counts. Selecting several
+ORs them, because chips are a net for scanning rather than a sieve — picking Go
+and Rust should widen the board to both. Each chip carries the rest of the
+selection, so clicking toggles one rather than replacing everything.
+
+The extractor is a curated list, for the same reason the gazetteer is: the set
+of things a backend engineer filters on is small, stable, and full of aliases
+nothing would guess (`k8s` is Kubernetes, `psql` is Postgres). Bare "go" needs
+corroboration from something Go-flavoured before it counts, or every
+"ready to go" post gets tagged.
 
 htmx is served from the binary at `/assets/htmx.min.js`, not a CDN. Every
 interactive part of this dashboard is htmx — the filters, saving settings,

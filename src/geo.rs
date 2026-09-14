@@ -125,42 +125,7 @@ pub struct Place {
     pub is_country: bool,
 }
 
-/// Whether a word boundary sits either side of this span.
-///
-/// Substring matching alone is how "pune" matches "Puneet" and "india" matches
-/// "Indiana" — both real words that turn up in hiring posts.
-fn boundary(hay: &str, start: usize, end: usize) -> bool {
-    let before_ok = start == 0
-        || !hay[..start]
-            .chars()
-            .next_back()
-            .map(|c| c.is_alphanumeric())
-            .unwrap_or(false);
-    let after_ok = end >= hay.len()
-        || !hay[end..]
-            .chars()
-            .next()
-            .map(|c| c.is_alphanumeric())
-            .unwrap_or(false);
-    before_ok && after_ok
-}
-
-/// Whole-word substring search.
-pub fn contains_word(hay: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return false;
-    }
-    let mut from = 0;
-    while let Some(i) = hay[from..].find(needle) {
-        let start = from + i;
-        let end = start + needle.len();
-        if boundary(hay, start, end) {
-            return true;
-        }
-        from = end;
-    }
-    false
-}
+pub use crate::text::contains_word;
 
 /// First place mentioned in free text.
 pub fn lookup(text: &str) -> Option<Place> {

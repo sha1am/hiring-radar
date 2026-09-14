@@ -25,6 +25,8 @@ pub fn router(state: AppState) -> Router {
         .route("/queue", get(queue))
         .route("/radar", get(radar))
         .route("/status", get(status_fragment))
+        .route("/outbox", get(outbox_page))
+        .route("/outbox/list", get(outbox_fragment))
         .route("/events", get(events))
         .route("/candidate/:id/send", post(send))
         .route("/candidate/:id/dismiss", post(dismiss))
@@ -47,7 +49,10 @@ async fn page(State(st): State<AppState>) -> impl IntoResponse {
     let q = render_queue(&st).await;
     let r = render_radar(&st, hours, &RadarQuery::default()).await;
     let h = render_history(&st).await;
-    Html(shell(&stat, &q, &r, &h))
+    let outbox_n = db::outbox_count(&st.pool, st.settings().await.outbox_min)
+        .await
+        .unwrap_or(0);
+    Html(shell(&stat, &q, &r, &h, outbox_n))
 }
 
 /// htmx is served from the binary rather than a CDN.
@@ -84,6 +89,8 @@ struct RadarQuery {
     status: String,
     tier: String,
     min: String,
+    /// Selected tech chips, comma-separated in the URL.
+    tags: Vec<String>,
 }
 
 impl RadarQuery {
@@ -101,7 +108,29 @@ impl RadarQuery {
             status: get("status"),
             tier: get("tier"),
             min: get("min"),
+            tags: get("tags")
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect(),
         }
+    }
+
+    fn has_tag(&self, t: &str) -> bool {
+        self.tags.iter().any(|x| x == t)
+    }
+
+    /// The chip list with one tag flipped — what a chip's own link points at,
+    /// so clicking toggles rather than replacing the selection.
+    fn toggled(&self, t: &str) -> String {
+        let mut next: Vec<&str> = self.tags.iter().map(String::as_str).collect();
+        if let Some(i) = next.iter().position(|x| *x == t) {
+            next.remove(i);
+        } else {
+            next.push(t);
+        }
+        next.join(",")
     }
 }
 
@@ -113,6 +142,7 @@ impl RadarQuery {
             status: self.status.trim().to_string(),
             tier: self.tier.trim().to_string(),
             min_score: self.min.trim().parse::<f64>().unwrap_or(0.0).clamp(0.0, 100.0),
+            tags: self.tags.clone(),
         }
     }
 
@@ -126,6 +156,7 @@ impl RadarQuery {
             ("status", self.status.as_str()),
             ("tier", self.tier.as_str()),
             ("min", self.min.as_str()),
+            ("tags", &self.tags.join(",")),
         ] {
             if !v.trim().is_empty() {
                 p.push(format!("{k}={}", urlencode(v.trim())));
@@ -177,9 +208,20 @@ struct DraftForm {
     body: String,
 }
 
+/// Which list to re-render after an action. Without this, acting on a card in
+/// the outbox swaps the queue's HTML into the outbox's slot.
+async fn after_action(st: &AppState, params: &std::collections::HashMap<String, String>) -> String {
+    if params.get("view").map(String::as_str) == Some("outbox") {
+        render_outbox(st).await
+    } else {
+        render_queue(st).await
+    }
+}
+
 async fn send(
     State(st): State<AppState>,
     Path(id): Path<i64>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
     Form(f): Form<DraftForm>,
 ) -> impl IntoResponse {
     if let Ok(Some(c)) = db::get(&st.pool, id).await {
@@ -195,19 +237,27 @@ async fn send(
         }
     }
     st.notify_ui();
-    Html(render_queue(&st).await)
+    Html(after_action(&st, &params).await)
 }
 
-async fn dismiss(State(st): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+async fn dismiss(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
     let _ = db::set_status(&st.pool, id, "dismissed").await;
     st.notify_ui();
-    Html(render_queue(&st).await)
+    Html(after_action(&st, &params).await)
 }
 
-async fn applied(State(st): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+async fn applied(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
     let _ = db::set_status(&st.pool, id, "applied").await;
     st.notify_ui();
-    Html(render_queue(&st).await)
+    Html(after_action(&st, &params).await)
 }
 
 /// Persist an edited draft without sending. The DM and external-apply cards have
@@ -292,7 +342,7 @@ fn why_matched(c: &Candidate) -> String {
     }
 }
 
-fn card(c: &Candidate) -> String {
+fn card(c: &Candidate, target: &str) -> String {
     let draft_subject = esc(c.draft_subject.as_deref().unwrap_or(""));
     let draft_body = esc(c.draft_body.as_deref().unwrap_or(""));
     let loc = esc(&c.location.clone().unwrap_or_default());
@@ -343,7 +393,7 @@ fn card(c: &Candidate) -> String {
     </div>
   </div>
   {why}
-  <form hx-post="/candidate/{id}/send" hx-target="#queue" hx-swap="outerHTML" class="mt-3">
+  <form hx-post="/candidate/{id}/send?view={view}" hx-target="{target}" hx-swap="outerHTML" class="mt-3">
     {subject_field}
     <textarea id="body-{id}" name="body" rows="6"
       class="w-full rounded-md bg-slate-900/60 border border-slate-700 px-3 py-2 text-sm font-mono leading-relaxed">{body}</textarea>
@@ -354,14 +404,16 @@ fn card(c: &Candidate) -> String {
         class="rounded-md bg-slate-700 hover:bg-slate-600 px-3 py-1.5 text-sm">Save draft</button>
       <span id="saved-{id}"></span>
       <span class="flex-1"></span>
-      <button type="button" hx-post="/candidate/{id}/applied" hx-target="#queue" hx-swap="outerHTML"
+      <button type="button" hx-post="/candidate/{id}/applied?view={view}" hx-target="{target}" hx-swap="outerHTML"
         class="rounded-md bg-slate-700 hover:bg-slate-600 px-3 py-1.5 text-sm">Mark applied</button>
-      <button type="button" hx-post="/candidate/{id}/dismiss" hx-target="#queue" hx-swap="outerHTML"
+      <button type="button" hx-post="/candidate/{id}/dismiss?view={view}" hx-target="{target}" hx-swap="outerHTML"
         class="rounded-md text-slate-400 hover:text-slate-200 px-3 py-1.5 text-sm">Dismiss</button>
     </div>
   </form>
 </article>"##,
         id = c.id,
+        target = target,
+        view = if target == "#outbox" { "outbox" } else { "queue" },
         title = esc(&c.title),
         company = esc(&c.company),
         loc = loc,
@@ -384,7 +436,7 @@ async fn render_queue(st: &AppState) -> String {
     let cards = if items.is_empty() {
         r##"<p class="text-slate-500 text-sm py-6 text-center">Nothing waiting on you. New matches land here the moment they fire.</p>"##.to_string()
     } else {
-        items.iter().map(card).collect::<Vec<_>>().join("\n")
+        items.iter().map(|c| card(c, "#queue")).collect::<Vec<_>>().join("\n")
     };
 
     format!(
@@ -410,6 +462,7 @@ fn radar_row(c: &Candidate) -> String {
   <a href="{url}" target="_blank" rel="noopener noreferrer" class="min-w-0 flex-1 group">
     <span class="block truncate text-slate-200 group-hover:text-white">{title}</span>
     <span class="block truncate text-xs text-slate-500">{company}{loc} &middot; {source}{why}</span>
+    <span class="block truncate mt-0.5">{tags}</span>
   </a>
   <span class="shrink-0 text-xs text-slate-500 tabular-nums">{age}</span>
   <span class="shrink-0 text-[10px] uppercase px-1.5 py-0.5 rounded ring-1 {chip_class}">{chip}</span>
@@ -437,6 +490,20 @@ fn radar_row(c: &Candidate) -> String {
             .map(|l| format!(" &middot; {}", esc(l)))
             .unwrap_or_default(),
         source = esc(source_label(&c.source)),
+        tags = c
+            .tags
+            .as_deref()
+            .map(|t| {
+                crate::tags::decode(t)
+                    .into_iter()
+                    .take(5)
+                    .map(|x| format!(
+                        r##"<span class="ml-1 px-1 rounded bg-slate-800 text-slate-400 text-[10px]">{}</span>"##,
+                        esc(&x)
+                    ))
+                    .collect::<String>()
+            })
+            .unwrap_or_default(),
         why = c
             .match_terms
             .as_deref()
@@ -472,6 +539,60 @@ fn opt_tag(value: &str, label: &str, selected: &str) -> String {
         v = esc(value),
         l = esc(label),
         sel = if value == selected { "selected" } else { "" }
+    )
+}
+
+/// Toggleable technology chips.
+///
+/// The text search already accepts "golang", but typing is the wrong interface
+/// for scanning: you want to flip between Go and Go-or-Rust without composing a
+/// query. Selected chips OR together, and each chip's link carries the rest of
+/// the selection so clicking one toggles it rather than replacing everything.
+fn tag_chips(q: &RadarQuery, hours: i64, facets: &[(String, i64)]) -> String {
+    if facets.is_empty() {
+        return String::new();
+    }
+    // Enough to cover a backend feed without turning into a wall.
+    const MAX_CHIPS: usize = 22;
+
+    let chips: String = facets
+        .iter()
+        .take(MAX_CHIPS)
+        .map(|(tag, n)| {
+            let on = q.has_tag(tag);
+            let mut next = RadarQuery {
+                hours: Some(hours),
+                q: q.q.clone(),
+                source: q.source.clone(),
+                status: q.status.clone(),
+                tier: q.tier.clone(),
+                min: q.min.clone(),
+                tags: Vec::new(),
+            };
+            next.tags = q
+                .toggled(tag)
+                .split(',')
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect();
+            format!(
+                r##"<button hx-get="/radar?{qs}" hx-target="#radar" hx-swap="outerHTML" hx-include="unset"
+      class="px-2 py-0.5 rounded-full text-xs ring-1 {cls}">{label}<span class="ml-1 opacity-60">{n}</span></button>"##,
+                qs = next.qs(hours),
+                cls = if on {
+                    "bg-sky-500/20 text-sky-200 ring-sky-500/40"
+                } else {
+                    "bg-slate-800/60 text-slate-400 ring-slate-700/60 hover:text-slate-200"
+                },
+                label = esc(tag),
+                n = n
+            )
+        })
+        .collect();
+
+    format!(
+        r##"<div class="mt-2 flex flex-wrap items-center gap-1.5">{chips}</div>"##,
+        chips = chips
     )
 }
 
@@ -523,6 +644,7 @@ fn filter_bar(q: &RadarQuery, hours: i64, sources: &[String], statuses: &[String
      hx-get="/radar" hx-target="#radar" hx-swap="outerHTML"
      hx-include="#radar-filters [name]" hx-trigger="change">
   <input type="hidden" name="hours" value="{hours}"/>
+  <input type="hidden" name="tags" value="{tags}"/>
   <input type="search" name="q" value="{q_val}" placeholder="search title, company, place, matched terms"
     class="flex-1 min-w-[12rem] rounded-md bg-slate-900/60 border border-slate-700 px-2 py-1 text-xs"
     hx-get="/radar" hx-target="#radar" hx-swap="outerHTML"
@@ -534,6 +656,7 @@ fn filter_bar(q: &RadarQuery, hours: i64, sources: &[String], statuses: &[String
   {clear}
 </div>"##,
         hours = hours,
+        tags = esc(&q.tags.join(",")),
         q_val = esc(&q.q),
         sel = sel,
         min_opts = min_opts,
@@ -555,6 +678,7 @@ async fn render_radar(st: &AppState, hours: i64, q: &RadarQuery) -> String {
         .unwrap_or_default();
     let total = db::recent_count(&st.pool, window).await.unwrap_or(0);
     let (sources, statuses) = db::radar_facets(&st.pool, window).await.unwrap_or_default();
+    let tag_facets = db::tag_facets(&st.pool, window).await.unwrap_or_default();
 
     // Best match first — the list is for scanning, not for chronology.
     items.sort_by(|a, b| {
@@ -597,6 +721,7 @@ async fn render_radar(st: &AppState, hours: i64, q: &RadarQuery) -> String {
     <div class="flex items-center gap-1 shrink-0">{b6}{b24}{b72}{b168}</div>
   </div>
   {filters}
+  {chips}
   {rows}
 </section>"##,
         total = total,
@@ -607,6 +732,7 @@ async fn render_radar(st: &AppState, hours: i64, q: &RadarQuery) -> String {
         b72 = window_button(72, hours, "3d", q),
         b168 = window_button(168, hours, "7d", q),
         filters = filter_bar(q, hours, &sources, &statuses),
+        chips = tag_chips(q, hours, &tag_facets),
         rows = rows
     )
 }
@@ -645,7 +771,7 @@ async fn render_history(st: &AppState) -> String {
     )
 }
 
-fn shell(status: &str, queue: &str, radar: &str, history: &str) -> String {
+fn shell(status: &str, queue: &str, radar: &str, history: &str, outbox_n: i64) -> String {
     format!(
         r##"<!doctype html>
 <html lang="en" class="dark">
@@ -667,6 +793,7 @@ fn shell(status: &str, queue: &str, radar: &str, history: &str) -> String {
       </div>
       <div class="flex items-center gap-3">
         <button onclick="reloadAll()" class="text-xs text-slate-400 hover:text-slate-200">refresh</button>
+        {outbox_link}
         <a href="/settings" class="text-xs text-slate-400 hover:text-slate-200">settings</a>
       </div>
     </header>
@@ -707,6 +834,14 @@ fn shell(status: &str, queue: &str, radar: &str, history: &str) -> String {
 </body>
 </html>"##,
         status = status,
+        outbox_link = if outbox_n > 0 {
+            format!(
+                r##"<a href="/outbox" class="text-xs text-sky-300 hover:text-sky-200">outbox <span class="ml-0.5 px-1.5 py-0.5 rounded-full bg-sky-500/20">{outbox_n}</span></a>"##,
+                outbox_n = outbox_n
+            )
+        } else {
+            r##"<a href="/outbox" class="text-xs text-slate-400 hover:text-slate-200">outbox</a>"##.to_string()
+        },
         queue = queue,
         radar = radar,
         history = history
@@ -756,6 +891,7 @@ struct SettingsForm {
     voyager_poll_pages: Option<String>,
 
     radar_hours: Option<String>,
+    outbox_min: Option<String>,
     resume_weight: Option<String>,
 }
 
@@ -882,6 +1018,7 @@ async fn settings_save(
         s.mode = v.trim().to_string();
     }
     s.radar_hours = num(&f.radar_hours, s.radar_hours);
+    s.outbox_min = num(&f.outbox_min, s.outbox_min);
     // The slider posts 0..100 for usability; stored as a 0..1 fraction.
     if f.resume_weight.is_some() {
         s.resume_weight = num(&f.resume_weight, s.resume_weight * 100.0) / 100.0;
@@ -1167,6 +1304,7 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
         {excep}
         {settle}
         {ttl}
+        {outbox}
       </div>
       <div class="pt-1">{adaptive}</div>
       <div class="grid grid-cols-2 gap-3">
@@ -1221,6 +1359,7 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
         strong = numf("strong_min", "Strong at", format!("{:.0}", s.strong_min), "1"),
         excep = numf("exceptional_min", "Exceptional at", format!("{:.0}", s.exceptional_min), "1"),
         settle = numf("settle_strong_mins", "Settle strong (min)", (s.settle_strong_secs / 60).to_string(), "1"),
+        outbox = numf("outbox_min", "Outbox bar", format!("{:.0}", s.outbox_min), "1"),
         ttl = numf("candidate_ttl_hours", "Keep competing (h)", (s.candidate_ttl_secs / 3600).to_string(), "1"),
         adaptive = check("adaptive_threshold", "Relax the bar as the hour drains", s.adaptive_threshold),
         astart = numf("adaptive_start", "Bar at :00", format!("{:.0}", s.adaptive_start), "1"),
@@ -1632,4 +1771,123 @@ async fn render_status(st: &AppState, hours: i64) -> String {
         sources = sources,
         expectation = expectation
     )
+}
+
+
+// ===================== outbox =====================
+
+/// Everything worth acting on, with a draft ready, until you act on it.
+///
+/// Separate from the alert queue on purpose: that one holds only what fired a
+/// notification, and notifications are capped at a few an hour. A post that
+/// scored 88 on a busy morning is no less worth applying to for having missed a
+/// slot, and burying it behind a rate limit is how a job-hunting tool quietly
+/// loses you the job.
+async fn render_outbox(st: &AppState) -> String {
+    let live = st.settings().await;
+    let min = live.outbox_min;
+    let mut items = db::outbox(&st.pool, min, 100).await.unwrap_or_default();
+    let total = db::outbox_count(&st.pool, min).await.unwrap_or(0);
+
+    // Backfilled posts are stored without a draft — drafting hundreds during
+    // the first crawl would stall it, and with a local LLM configured it would
+    // stall it badly. So they are filled in here, for what is actually on
+    // screen, and persisted so it happens once.
+    let matcher_name = st.cfg.profile.name.clone();
+    let email = st.cfg.profile.email.clone();
+    for c in items.iter_mut() {
+        if c.draft_body.is_none() {
+            let post = crate::model::RawPost {
+                source: c.source.clone(),
+                external_id: c.urn.clone(),
+                url: c.url.clone(),
+                title: c.title.clone(),
+                company: c.company.clone(),
+                location: c.location.clone(),
+                body: c.body.clone(),
+                posted_at: c.posted_at,
+                apply: c.apply(),
+                synthetic_title: c.source == "linkedin_voyager",
+            };
+            let (subject, body) = st.drafter.draft(&post, &live, &matcher_name, &email).await;
+            let _ = db::set_draft(&st.pool, c.id, &subject, &body).await;
+            c.draft_subject = Some(subject);
+            c.draft_body = Some(body);
+        }
+    }
+
+    let cards = if items.is_empty() {
+        format!(
+            r##"<p class="text-slate-500 text-sm py-8 text-center">Nothing at or above {min:.0} yet. Lower the bar in <a href="/settings" class="underline hover:text-slate-300">settings</a>, or wait for the next crawl.</p>"##,
+            min = min
+        )
+    } else {
+        items
+            .iter()
+            .map(|c| card(c, "#outbox"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let shown = if total > items.len() as i64 {
+        format!(" (showing {})", items.len())
+    } else {
+        String::new()
+    };
+
+    format!(
+        r##"<section id="outbox" class="space-y-3">
+  <div class="flex items-center justify-between">
+    <h2 class="text-sm uppercase tracking-wide text-slate-400">
+      Outbox <span class="text-slate-600 normal-case">&middot; {total} at {min:.0}+{shown}</span>
+    </h2>
+    <a href="/settings" class="text-xs text-slate-500 hover:text-slate-300">tune the bar &rarr;</a>
+  </div>
+  {cards}
+</section>"##,
+        total = total,
+        min = min,
+        shown = shown,
+        cards = cards
+    )
+}
+
+async fn outbox_fragment(State(st): State<AppState>) -> impl IntoResponse {
+    Html(render_outbox(&st).await)
+}
+
+async fn outbox_page(State(st): State<AppState>) -> impl IntoResponse {
+    let body = render_outbox(&st).await;
+    Html(format!(
+        r##"<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Hiring Radar &middot; Outbox</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/assets/htmx.min.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 py-8">
+    <header class="flex items-center justify-between mb-6">
+      <div class="flex items-center gap-2">
+        <span class="text-xl">&#128225;</span>
+        <h1 class="text-lg font-semibold">Outbox</h1>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="/" class="text-xs text-slate-400 hover:text-slate-200">radar</a>
+        <a href="/settings" class="text-xs text-slate-400 hover:text-slate-200">settings</a>
+      </div>
+    </header>
+    {body}
+  </div>
+  <script>
+    const es = new EventSource('/events');
+    es.onmessage = () => htmx.ajax('GET', '/outbox/list', {{target:'#outbox', swap:'outerHTML'}});
+  </script>
+</body>
+</html>"##,
+        body = body
+    ))
 }

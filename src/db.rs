@@ -28,7 +28,8 @@ const SCHEMA: &[&str] = &[
         draft_subject TEXT,
         draft_body TEXT,
         notified_at INTEGER,
-        match_terms TEXT
+        match_terms TEXT,
+        tags TEXT
     )",
     // Persisted IDF corpus, so a restart doesn't start from a flat idf of 1.
     "CREATE TABLE IF NOT EXISTS corpus_terms (
@@ -76,7 +77,10 @@ const SCHEMA: &[&str] = &[
 ];
 
 /// Applied on every boot, failures ignored — see connect().
-const MIGRATIONS: &[&str] = &["ALTER TABLE candidates ADD COLUMN match_terms TEXT"];
+const MIGRATIONS: &[&str] = &[
+    "ALTER TABLE candidates ADD COLUMN match_terms TEXT",
+    "ALTER TABLE candidates ADD COLUMN tags TEXT",
+];
 
 pub async fn connect(url: &str) -> anyhow::Result<SqlitePool> {
     // WAL matters here: N crawl loops, the release ticker and every web handler
@@ -237,6 +241,7 @@ pub struct NewCandidate {
     pub draft_subject: Option<String>,
     pub draft_body: Option<String>,
     pub match_terms: Option<String>,
+    pub tags: Option<String>,
 }
 
 /// `status` is 'scored' for live detections and 'backfilled' for the first
@@ -252,8 +257,8 @@ pub async fn insert_candidate(
         "INSERT INTO candidates
          (urn, source, url, title, company, location, body, score, priority, tier, status,
           detected_at, posted_at, expires_at, settle_until, apply_kind, apply_target,
-          draft_subject, draft_body, match_terms)
-         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?)
+          draft_subject, draft_body, match_terms, tags)
+         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(urn) DO NOTHING",
     )
     .bind(&c.urn)
@@ -276,6 +281,7 @@ pub async fn insert_candidate(
     .bind(&c.draft_subject)
     .bind(&c.draft_body)
     .bind(&c.match_terms)
+    .bind(&c.tags)
     .execute(pool)
     .await?;
     Ok(())
@@ -344,6 +350,9 @@ pub struct RadarFilter {
     pub status: String,
     pub tier: String,
     pub min_score: f64,
+    /// Selected tech chips. These OR together: chips are a net for scanning,
+    /// not a sieve — picking Go and Rust should widen the board to both.
+    pub tags: Vec<String>,
 }
 
 impl RadarFilter {
@@ -353,6 +362,7 @@ impl RadarFilter {
             || !self.status.is_empty()
             || !self.tier.is_empty()
             || self.min_score > 0.0
+            || !self.tags.is_empty()
     }
 }
 
@@ -366,7 +376,22 @@ pub async fn recent_filtered(
     let cutoff = now() - window_secs;
     let like = format!("%{}%", f.q.to_lowercase());
 
-    let rows = sqlx::query_as::<_, Candidate>(
+    // The tag clause is the one part that cannot be a fixed string: it is an OR
+    // over however many chips are selected. Built with placeholders and bound
+    // below — never interpolated, since these values arrive from a query string.
+    let tag_clause = if f.tags.is_empty() {
+        String::new()
+    } else {
+        let ors = f
+            .tags
+            .iter()
+            .map(|_| "instr(COALESCE(tags, ''), ?) > 0")
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        format!(" AND ({ors})")
+    };
+
+    let sql = format!(
         "SELECT * FROM candidates
          WHERE COALESCE(posted_at, detected_at) > ?
            AND (? = '' OR source = ?)
@@ -379,9 +404,12 @@ pub async fn recent_filtered(
               OR lower(COALESCE(location, '')) LIKE ?
               OR lower(COALESCE(match_terms, '')) LIKE ?
            ))
+         {tag_clause}
          ORDER BY COALESCE(posted_at, detected_at) DESC
-         LIMIT ?",
-    )
+         LIMIT ?"
+    );
+
+    let mut query = sqlx::query_as::<_, Candidate>(&sql)
     .bind(cutoff)
     .bind(&f.source)
     .bind(&f.source)
@@ -394,11 +422,40 @@ pub async fn recent_filtered(
     .bind(&like)
     .bind(&like)
     .bind(&like)
-    .bind(&like)
-    .bind(limit)
+    .bind(&like);
+
+    for t in &f.tags {
+        query = query.bind(crate::tags::needle(t));
+    }
+
+    let rows = query.bind(limit).fetch_all(pool).await?;
+    Ok(rows)
+}
+
+/// Every tech tag present in the window, with how many posts carry it, most
+/// common first. The chips are built from this so they only ever offer
+/// something that can return a result.
+pub async fn tag_facets(pool: &SqlitePool, window_secs: i64) -> anyhow::Result<Vec<(String, i64)>> {
+    let cutoff = now() - window_secs;
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT tags FROM candidates
+         WHERE COALESCE(posted_at, detected_at) > ? AND tags IS NOT NULL AND tags != ''",
+    )
+    .bind(cutoff)
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+
+    let mut counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for (t,) in rows {
+        for tag in crate::tags::decode(&t) {
+            *counts.entry(tag).or_insert(0) += 1;
+        }
+    }
+    let mut out: Vec<(String, i64)> = counts.into_iter().collect();
+    // Count first, then name, so the order is stable between refreshes rather
+    // than shuffling chips under the cursor.
+    out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    Ok(out)
 }
 
 /// The distinct sources and statuses actually present in the window, so the
@@ -516,6 +573,39 @@ pub async fn set_status(pool: &SqlitePool, id: i64, status: &str) -> anyhow::Res
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// The outbox: everything worth acting on that you have not acted on yet.
+///
+/// Independent of the notification budget on purpose. `active()` returns only
+/// what actually fired an alert, which is capped at a few per hour — fine as a
+/// definition of "what interrupted me", useless as a definition of "what should
+/// I apply to". A post that scored 88 on a busy morning is no less worth your
+/// time for having missed a slot.
+pub async fn outbox(pool: &SqlitePool, min_score: f64, limit: i64) -> anyhow::Result<Vec<Candidate>> {
+    let rows = sqlx::query_as::<_, Candidate>(
+        "SELECT * FROM candidates
+         WHERE score >= ?
+           AND status NOT IN ('sent','applied','dismissed','expired')
+         ORDER BY score DESC, COALESCE(posted_at, detected_at) DESC
+         LIMIT ?",
+    )
+    .bind(min_score)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn outbox_count(pool: &SqlitePool, min_score: f64) -> anyhow::Result<i64> {
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM candidates
+         WHERE score >= ? AND status NOT IN ('sent','applied','dismissed','expired')",
+    )
+    .bind(min_score)
+    .fetch_one(pool)
+    .await?;
+    Ok(n)
 }
 
 /// Cards currently awaiting your action on the dashboard.
