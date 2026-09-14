@@ -847,6 +847,8 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
     <a href="/" class="text-xs text-slate-400 hover:text-slate-200">&larr; back to radar</a>
   </header>
   {banner}
+  {resume}
+
   <form method="post" action="/settings" class="space-y-8">
 
     <section class="space-y-3">
@@ -862,8 +864,6 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
       </div>
       {weight}
     </section>
-
-    {resume}
 
     <section class="space-y-3">
       <h2 class="text-sm uppercase tracking-wide text-slate-400">Sources</h2>
@@ -907,6 +907,14 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
 </body>
 </html>"##,
         banner = banner,
+        // resume_section renders its own form elements (upload, and remove when
+        // a resume is loaded), so it is interpolated ABOVE the settings form and
+        // must never move inside it. HTML forms cannot nest: a browser discards
+        // the inner start tag but still acts on the inner closing tag, which
+        // silently closes the outer form and orphans every field and button
+        // after it. That is precisely how the Save button stopped working, and
+        // it is invisible to any test that posts the form directly rather than
+        // parsing the page. Guarded by save_button_is_inside_the_form_*.
         resume = resume_section(s, derived),
         weight = weight_slider(s),
         titles = ta("titles", "Target titles", "One per line. Matched against the job title; a full match is the strongest single signal.", &s.titles, 5),
@@ -938,6 +946,73 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
     )
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn page_with(resume: &str) -> String {
+        let mut s: Settings = serde_json::from_str("{}").expect("all fields default");
+        s.resume = resume.to_string();
+        if !resume.is_empty() {
+            s.resume_filename = Some("cv.pdf".into());
+        }
+        settings_shell(&s, None, &["golang".to_string()])
+    }
+
+    /// The bug this guards against was invisible to every curl test: posting the
+    /// form directly worked fine, but in a browser the Save button was orphaned
+    /// outside the form and did nothing.
+    ///
+    /// Nested forms are unrepresentable in the DOM — the parser drops the inner
+    /// <form> start tag and honours its </form>, closing the outer one early.
+    /// So: between the settings <form> and its submit button there must be no
+    /// </form> at all.
+    fn assert_save_button_is_inside_the_form(html: &str) {
+        let open = html
+            .find(r##"action="/settings""##)
+            .expect("settings form is present");
+        let save = html.find("Save settings").expect("save button is present");
+        assert!(open < save, "form must open before the save button");
+        let between = &html[open..save];
+        assert!(
+            !between.contains("</form>"),
+            "a </form> between the settings form and its Save button orphans \
+             every field after it:\n{}",
+            between
+                .match_indices("</form>")
+                .map(|(i, _)| format!("at +{i}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        assert!(
+            !between.contains("<form"),
+            "a nested <form> inside the settings form breaks it"
+        );
+    }
+
+    #[test]
+    fn save_button_is_inside_the_form_without_a_resume() {
+        assert_save_button_is_inside_the_form(&page_with(""));
+    }
+
+    /// With a resume loaded the block renders a second form (Remove resume), so
+    /// this is the case that had two nested forms rather than one.
+    #[test]
+    fn save_button_is_inside_the_form_with_a_resume() {
+        let long = "backend engineer golang kafka postgres ".repeat(20);
+        assert_save_button_is_inside_the_form(&page_with(&long));
+    }
+
+    #[test]
+    fn resume_upload_form_targets_its_own_endpoint() {
+        let html = page_with("");
+        assert!(
+            html.contains(r##"action="/settings/resume""##),
+            "upload form must post to its own endpoint"
+        );
+    }
+}
 
 // ===================== resume intake =====================
 
