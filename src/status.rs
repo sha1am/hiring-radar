@@ -105,6 +105,35 @@ impl Status {
         self.sources.entry(name.to_string()).or_default()
     }
 
+    /// Re-sync the enabled flags the moment settings change.
+    ///
+    /// Without this, a source keeps its `enabled` value until its next crawl —
+    /// which for Greenhouse is ten minutes — so switching to LinkedIn-posts
+    /// mode leaves the panel still reporting the now-disabled board's 404 as a
+    /// live failure. A source that has just been switched off also has its
+    /// stale notes and counters cleared: they describe a crawl that is no
+    /// longer happening.
+    pub fn apply_settings(&mut self, s: &crate::settings::Settings) {
+        for (name, on) in [
+            ("greenhouse", s.greenhouse_enabled),
+            ("linkedin_guest", s.linkedin_guest_enabled),
+            ("linkedin_voyager", s.voyager_enabled),
+        ] {
+            let e = self.entry(name);
+            if e.enabled && !on {
+                e.notes.clear();
+                e.last_error = None;
+                e.fetched = 0;
+                e.new_posts = 0;
+                e.stored = 0;
+                e.not_hiring = 0;
+                e.below_floor = 0;
+                e.next_run = None;
+            }
+            e.enabled = on;
+        }
+    }
+
     /// Has any source finished a crawl yet?
     pub fn any_crawl_completed(&self) -> bool {
         self.sources.values().any(|s| s.last_run.is_some())

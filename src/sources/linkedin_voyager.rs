@@ -27,11 +27,24 @@ impl Voyager {
     /// Credentials and the queryId still come from config/env — they are
     /// secrets and a fragile constant, not things to edit in a web form. The
     /// dashboard toggle only decides whether to use them.
-    fn ready(&self, live: &Settings) -> bool {
-        live.voyager_enabled
-            && self.cfg.li_at.is_some()
-            && !self.cfg.query_id.is_empty()
-            && !self.cfg.query_id.contains("REPLACE_ME")
+    /// Credentials stay in env — they are secrets. The queryId comes from
+    /// settings, because it is a public constant that changes whenever
+    /// LinkedIn ships and must be replaceable without a rebuild.
+    fn missing(&self, live: &Settings) -> Option<&'static str> {
+        if self.cfg.li_at.is_none() {
+            return Some("LI_AT is not set — put your li_at cookie in .env and restart");
+        }
+        let qid = &live.voyager_query_id;
+        if qid.is_empty() || qid.contains("REPLACE_ME") {
+            return Some(
+                "no queryId — grab one from DevTools → Network on a LinkedIn \
+                 content search and paste it in Settings → Sources",
+            );
+        }
+        if live.voyager_queries.is_empty() {
+            return Some("no search terms — add #hiring in Settings → Sources");
+        }
+        None
     }
 }
 
@@ -47,11 +60,12 @@ impl JobSource for Voyager {
 
     async fn fetch(&self, live: &Settings) -> anyhow::Result<Fetched> {
         let mut out = Fetched::default();
-        if !self.ready(live) {
-            if live.voyager_enabled {
-                out.fail("enabled, but LI_AT / query_id are not set in config");
-            }
-            tracing::debug!("voyager source not configured; skipping");
+        if !live.voyager_enabled {
+            return Ok(out);
+        }
+        if let Some(why) = self.missing(live) {
+            out.fail(why);
+            tracing::debug!(why, "voyager not configured; skipping");
             return Ok(out);
         }
         let li_at = self.cfg.li_at.as_deref().unwrap_or_default();
@@ -60,57 +74,96 @@ impl JobSource for Voyager {
         let csrf = jsession.trim_matches('"');
         let cookie = format!("li_at={li_at}; JSESSIONID=\"{jsession}\"");
 
-        let keywords = live.titles.join(" OR ");
         let mut posts = Vec::new();
 
-        // The variables blob is query-specific; this is the common content-search shape.
-        let variables = format!(
-            "(query:(keywords:{},flagshipSearchIntent:SEARCH_CONTENT))",
-            urlish(&keywords)
-        );
-        let url = format!(
-            "https://www.linkedin.com/voyager/api/graphql?queryId={}&variables={}",
-            self.cfg.query_id, variables
-        );
+        // One search per term. Hashtag searches are what surface "we're hiring"
+        // posts; a single OR'd blob returns a worse mix than separate passes.
+        for term in &live.voyager_queries {
+            let variables = format!(
+                "(query:(keywords:{},flagshipSearchIntent:SEARCH_CONTENT))",
+                urlish(term)
+            );
+            let url = format!(
+                "https://www.linkedin.com/voyager/api/graphql?queryId={}&variables={}",
+                live.voyager_query_id, variables
+            );
 
-        let resp = self
-            .client
-            .get(&url)
-            .header("cookie", &cookie)
-            .header("csrf-token", csrf)
-            .header("accept", "application/vnd.linkedin.normalized+json+2.1")
-            .header("x-restli-protocol-version", "2.0.0")
-            .header("x-li-lang", "en_US")
-            .header("user-agent", &self.user_agent)
-            .header("referer", "https://www.linkedin.com/search/results/content/")
-            .send()
-            .await;
+            let resp = self
+                .client
+                .get(&url)
+                .header("cookie", &cookie)
+                .header("csrf-token", csrf)
+                .header("accept", "application/vnd.linkedin.normalized+json+2.1")
+                .header("x-restli-protocol-version", "2.0.0")
+                .header("x-li-lang", "en_US")
+                .header("user-agent", &self.user_agent)
+                .header("referer", "https://www.linkedin.com/search/results/content/")
+                .send()
+                .await;
 
-        let body: Value = match resp {
-            Ok(r) if r.status().is_success() => r.json().await.unwrap_or(Value::Null),
-            Ok(r) => {
-                tracing::warn!(status = %r.status(),
-                    "voyager non-200 (cookie expired or queryId stale?)");
-                out.fail(format!(
-                    "HTTP {} — cookie expired or queryId stale",
-                    r.status().as_u16()
-                ));
-                return Ok(out);
+            let body: Value = match resp {
+                Ok(r) if r.status().is_success() => r.json().await.unwrap_or(Value::Null),
+                Ok(r) => {
+                    let code = r.status().as_u16();
+                    tracing::warn!(term, status = code, "voyager non-200");
+                    out.fail(format!(
+                        "{term}: HTTP {code}{}",
+                        match code {
+                            401 | 403 => " — cookie expired or rejected, refresh li_at",
+                            429 => " — rate limited, widen the poll interval",
+                            400 => " — queryId or variables rejected, the shape changed",
+                            _ => "",
+                        }
+                    ));
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(term, %e, "voyager fetch failed");
+                    out.fail(format!("{term}: unreachable — {}", brief(&e)));
+                    continue;
+                }
+            };
+
+            let before = posts.len();
+            walk(&body, &mut posts);
+            let found = posts.len() - before;
+
+            if found == 0 {
+                // A 200 that yields nothing means the JSON shape moved, which is
+                // the single most likely way this source breaks. Report what the
+                // payload actually looked like so the field names in
+                // looks_like_post can be corrected without guessing.
+                out.fail(format!("{term}: HTTP 200 but no posts extracted — {}", shape(&body)));
+            } else {
+                out.ok(format!("{term}: {found} posts"));
             }
-            Err(e) => {
-                tracing::warn!(%e, "voyager fetch failed");
-                out.fail(format!("unreachable — {}", brief(&e)));
-                return Ok(out);
-            }
-        };
+        }
 
-        walk(&body, &mut posts);
         tracing::info!(found = posts.len(), "voyager content search");
-        out.ok(format!("{} posts extracted", posts.len()));
         out.posts = posts;
         Ok(out)
     }
 }
+
+/// A one-line description of an unexpected payload: top-level keys and the size
+/// of the usual containers. Enough to tell "auth wall" from "renamed fields".
+fn shape(v: &Value) -> String {
+    match v {
+        Value::Object(m) => {
+            let keys: Vec<String> = m.keys().take(6).cloned().collect();
+            let included = m
+                .get("included")
+                .and_then(|i| i.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            format!("keys: [{}], included: {}", keys.join(", "), included)
+        }
+        Value::Null => "empty/unparseable response".into(),
+        other => format!("unexpected root: {}", other),
+    }
+}
+
+
 
 /// Recursively scan the normalised JSON for anything that looks like a feed post.
 fn walk(v: &Value, out: &mut Vec<RawPost>) {
@@ -191,6 +244,8 @@ fn looks_like_post(map: &serde_json::Map<String, Value>) -> Option<RawPost> {
         posted_at: None,
         url,
         apply,
+        // A feed post has no title; this is its first line.
+        synthetic_title: true,
     })
 }
 

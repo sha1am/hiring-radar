@@ -35,6 +35,9 @@ impl AppState {
     }
 
     pub async fn set_settings(&self, s: Settings) {
+        // Sync the status view first so the dashboard never renders a source as
+        // live-and-failing in the same instant the user just switched it off.
+        self.status.write().await.apply_settings(&s);
         *self.settings.write().await = Arc::new(s);
     }
 

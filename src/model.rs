@@ -22,6 +22,11 @@ pub struct RawPost {
     pub body: String,
     pub posted_at: Option<i64>,
     pub apply: ApplyChannel,
+    /// True when `title` was invented by the source rather than reported by it.
+    /// A feed post has no title field, so we use its first line — matching
+    /// target job titles against that is close to meaningless, and the scorer
+    /// redistributes the title budget rather than handing out zeros.
+    pub synthetic_title: bool,
 }
 
 impl RawPost {

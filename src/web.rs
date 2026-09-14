@@ -547,11 +547,14 @@ struct SettingsForm {
     adaptive_start: Option<String>,
     adaptive_end: Option<String>,
 
+    mode: Option<String>,
     greenhouse_enabled: Option<String>,
     greenhouse_boards: Option<String>,
     linkedin_guest_enabled: Option<String>,
     linkedin_queries: Option<String>,
     voyager_enabled: Option<String>,
+    voyager_queries: Option<String>,
+    voyager_query_id: Option<String>,
 
     radar_hours: Option<String>,
     resume_weight: Option<String>,
@@ -661,6 +664,17 @@ async fn settings_save(
             .collect();
     }
     s.voyager_enabled = checked(&f.voyager_enabled);
+    if let Some(v) = &f.voyager_queries {
+        s.voyager_queries = parse_list(v);
+    }
+    if let Some(v) = &f.voyager_query_id {
+        s.voyager_query_id = v.trim().to_string();
+    }
+    // Set the mode LAST: sanitize() lets it overrule the individual toggles, so
+    // reading it after them means the radio wins over stale checkbox state.
+    if let Some(v) = &f.mode {
+        s.mode = v.trim().to_string();
+    }
     s.radar_hours = num(&f.radar_hours, s.radar_hours);
     // The slider posts 0..100 for usability; stored as a 0..1 fraction.
     if f.resume_weight.is_some() {
@@ -718,6 +732,68 @@ fn numf(name: &str, label: &str, val: String, step: &str) -> String {
         label = esc(label),
         val = esc(&val),
         step = step
+    )
+}
+
+/// Free-text input; numf() forces type=number, which the queryId is not.
+fn textf(name: &str, label: &str, val: &str, hint: &str) -> String {
+    format!(
+        r##"<label class="block">
+  <span class="block text-sm text-slate-300">{label}</span>
+  <span class="block text-xs text-slate-500 mb-1">{hint}</span>
+  <input type="text" name="{name}" value="{val}"
+    class="w-full rounded-md bg-slate-900/60 border border-slate-700 px-3 py-1.5 text-sm font-mono"/>
+</label>"##,
+        name = name,
+        label = esc(label),
+        hint = esc(hint),
+        val = esc(val)
+    )
+}
+
+/// Presets over the three source toggles. "LinkedIn posts only" is the mode
+/// this project was originally about; "job boards only" is the one that works
+/// with no credentials and no ban risk.
+fn mode_picker(s: &Settings) -> String {
+    let opt = |val: &str, title: &str, desc: &str| {
+        format!(
+            r##"<label class="flex items-start gap-2 rounded-md ring-1 px-3 py-2 cursor-pointer {sel}">
+  <input type="radio" name="mode" value="{val}" {on} class="mt-1"/>
+  <span>
+    <span class="block text-sm text-slate-200">{title}</span>
+    <span class="block text-xs text-slate-500">{desc}</span>
+  </span>
+</label>"##,
+            val = val,
+            title = esc(title),
+            desc = esc(desc),
+            on = if s.mode == val { "checked" } else { "" },
+            sel = if s.mode == val {
+                "bg-slate-800/60 ring-slate-600"
+            } else {
+                "ring-slate-800 hover:ring-slate-700"
+            }
+        )
+    };
+    format!(
+        r##"<div class="space-y-2">
+  {all}
+  {boards}
+  {posts}
+  {custom}
+</div>"##,
+        all = opt("all", "Everything", "Job boards and both LinkedIn sources."),
+        boards = opt(
+            "boards",
+            "Job boards only",
+            "Greenhouse. No login, no ban risk — the safe default."
+        ),
+        posts = opt(
+            "posts",
+            "LinkedIn posts only",
+            "Hashtag searches of the feed for hiring posts. Needs your li_at cookie and a live queryId."
+        ),
+        custom = opt("custom", "Custom", "Use the individual toggles below."),
     )
 }
 
@@ -791,12 +867,15 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
 
     <section class="space-y-3">
       <h2 class="text-sm uppercase tracking-wide text-slate-400">Sources</h2>
+      {mode}
       {gh_on}
       {gh_boards}
       {li_on}
       {li_queries}
       {voy_on}
-      <p class="text-xs text-slate-500">Voyager also needs enabled credentials (LI_AT) and a live queryId in config.toml &mdash; secrets don't belong in a web form.</p>
+      {voy_queries}
+      {voy_qid}
+      <p class="text-xs text-slate-500">Your <code>li_at</code> cookie stays in <code>.env</code> &mdash; secrets don't belong in a web form. The queryId is not a secret, just a constant that breaks whenever LinkedIn ships, so it lives here.</p>
     </section>
 
     <section class="space-y-3">
@@ -837,11 +916,14 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
         dealbreakers = ta("dealbreakers", "Dealbreakers", "One per line. Any hit zeroes the post outright — keep these specific.", &s.dealbreakers, 3),
         remote = check("remote_ok", "Remote roles count as a location match", s.remote_ok),
         minsal = numf("min_salary", "Min salary (optional, blank = ignore)", s.min_salary.map(|v| v.to_string()).unwrap_or_default(), "1"),
+        mode = mode_picker(s),
         gh_on = check("greenhouse_enabled", "Greenhouse boards", s.greenhouse_enabled),
         gh_boards = ta("greenhouse_boards", "Board tokens", "One per line — the slug in boards.greenhouse.io/<token>. A wrong token is a silent 404.", &s.greenhouse_boards, 4),
         li_on = check("linkedin_guest_enabled", "LinkedIn guest jobs", s.linkedin_guest_enabled),
         li_queries = ta("linkedin_queries", "LinkedIn queries", "One per line: keywords | location", &queries, 3),
-        voy_on = check("voyager_enabled", "LinkedIn Voyager (authenticated, fragile, ban risk)", s.voyager_enabled),
+        voy_on = check("voyager_enabled", "LinkedIn feed posts — authenticated, fragile, ban risk", s.voyager_enabled),
+        voy_queries = ta("voyager_queries", "Feed searches", "One per line. Hashtags work best: #hiring, #hiringnow. Each runs as its own search.", &s.voyager_queries, 4),
+        voy_qid = textf("voyager_query_id", "Voyager queryId", &s.voyager_query_id, "voyagerSearchDashClusters.xxxxxxxx — copy from DevTools → Network on a content search"),
         cap = numf("per_hour_cap", "Alerts / hour", s.per_hour_cap.to_string(), "1"),
         poster = numf("per_poster_cap", "Per company / hour", s.per_poster_cap.to_string(), "1"),
         radar = numf("radar_hours", "Radar window (h)", s.radar_hours.to_string(), "1"),

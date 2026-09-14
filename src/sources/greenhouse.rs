@@ -135,6 +135,7 @@ impl JobSource for Greenhouse {
                     body: strip_html(&j.content),
                     posted_at,
                     apply: ApplyChannel::ExternalUrl(j.absolute_url),
+                    synthetic_title: false,
                 });
             }
         }

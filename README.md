@@ -99,6 +99,48 @@ It is deliberately not an LLM call: this runs on the instant path for every
 post, and the score you see has to be the one the release engine acted on.
 Nothing about your resume leaves the container.
 
+## Modes
+
+Settings → Sources has three presets over the individual toggles:
+
+| Mode | What it watches | Needs |
+|------|-----------------|-------|
+| **Job boards only** | Greenhouse boards | nothing — no login, no ban risk |
+| **LinkedIn posts only** | hashtag searches of the feed for "we're hiring" posts | `li_at` cookie + a live queryId |
+| **Everything** | all three sources | as above |
+
+The mode owns the toggles: switching to a preset overrules whatever the
+individual checkboxes said, so the UI can never claim one thing while the crawl
+loops do another.
+
+### LinkedIn posts mode
+
+This is the mode the project was originally about — actual posts from people
+hiring, not formal listings. Setup:
+
+1. Put your cookie in `.env`: `LI_AT=...` (and `LI_JSESSIONID=...`). These are
+   secrets, so they stay out of the web form and out of git. **Changing `.env`
+   needs a container restart** — the environment is read once at boot.
+2. Open a LinkedIn content search with DevTools → Network, find the
+   `voyager/api/graphql` request, and copy its `queryId`. Paste it into
+   Settings → Sources. It is not a secret — just a constant that breaks whenever
+   LinkedIn ships — so it lives in settings and needs no rebuild.
+3. Set your searches, one per line. Hashtags work best: `#hiring`, `#hiringnow`.
+   Each runs as its own search rather than one OR'd blob, which returns a better
+   mix.
+
+A feed post has no title field, so its "title" is just the first line. Matching
+job titles against that is meaningless, so for these posts the title budget is
+redistributed into the content score, where the post's own text can earn it.
+Without that, every feed post would forfeit 40 points and sit below any sane
+floor — the mode would look broken rather than empty.
+
+When it breaks — and it will, because Voyager is LinkedIn's private API — the
+status panel says how. A 200 that yields no posts reports the payload's actual
+shape, so you can correct the field names in `looks_like_post` instead of
+guessing. 401/403 means the cookie expired; 400 means the queryId or variables
+were rejected.
+
 ## Settings
 
 `/settings` edits, live, with no restart:

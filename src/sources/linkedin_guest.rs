@@ -145,6 +145,7 @@ fn parse_cards(html: &str) -> Vec<RawPost> {
             body: String::new(),
             posted_at,
             apply: ApplyChannel::ExternalUrl(url),
+            synthetic_title: false,
         });
     }
     out

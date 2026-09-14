@@ -94,6 +94,12 @@ async fn main() -> anyhow::Result<()> {
         matcher: Arc::new(tokio::sync::RwLock::new(Arc::new(matcher))),
         status: Arc::new(tokio::sync::RwLock::new(status::Status::new())),
     };
+    // Seed the status with which sources are on, so the panel is accurate
+    // before the first crawl rather than showing three unknown rows.
+    {
+        let live = state.settings().await;
+        state.status.write().await.apply_settings(&live);
+    }
 
     // ---- assemble sources ----
     // Every source gets a loop unconditionally; each one checks the live

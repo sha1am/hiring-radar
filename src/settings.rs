@@ -65,6 +65,11 @@ pub struct Settings {
     pub adaptive_end: f64,
 
     // ---- sources ----
+    /// "all" | "boards" | "posts" | "custom". Anything but "custom" drives the
+    /// individual toggles in sanitize(), so the mode is always the truth and
+    /// the toggles can't silently disagree with it.
+    #[serde(default = "def_mode")]
+    pub mode: String,
     #[serde(default)]
     pub greenhouse_enabled: bool,
     #[serde(default)]
@@ -75,6 +80,17 @@ pub struct Settings {
     pub linkedin_queries: Vec<Query>,
     #[serde(default)]
     pub voyager_enabled: bool,
+    /// Hashtags and phrases to search the LinkedIn feed for, one search each —
+    /// "#hiring", "#hiringnow", "we are hiring backend". Separate from the job
+    /// titles, because what people write in a hiring POST is not what a job
+    /// board puts in a title field.
+    #[serde(default = "def_voyager_queries")]
+    pub voyager_queries: Vec<String>,
+    /// Voyager's queryId. Not a secret — it is a public constant that changes
+    /// whenever LinkedIn ships — so it lives here rather than in config.toml,
+    /// which is mounted read-only and would need a rebuild to change.
+    #[serde(default)]
+    pub voyager_query_id: String,
 
     // ---- dashboard ----
     #[serde(default = "def_radar_hours")]
@@ -98,6 +114,10 @@ fn def_ttl() -> i64 { 43200 }
 fn def_adaptive_start() -> f64 { 82.0 }
 fn def_adaptive_end() -> f64 { 70.0 }
 fn def_radar_hours() -> i64 { 24 }
+fn def_mode() -> String { "all".into() }
+fn def_voyager_queries() -> Vec<String> {
+    vec!["#hiring".into(), "#hiringnow".into(), "#nowhiring".into()]
+}
 
 impl Settings {
     /// Seed values from config.toml, used the first time the app runs against
@@ -128,6 +148,7 @@ impl Settings {
             adaptive_start: c.release.adaptive_start,
             adaptive_end: c.release.adaptive_end,
 
+            mode: def_mode(),
             greenhouse_enabled: c.greenhouse.enabled,
             greenhouse_boards: c.greenhouse.boards.clone(),
             linkedin_guest_enabled: !c.crawl.linkedin_queries.is_empty(),
@@ -141,6 +162,8 @@ impl Settings {
                 })
                 .collect(),
             voyager_enabled: c.linkedin_voyager.enabled,
+            voyager_queries: def_voyager_queries(),
+            voyager_query_id: c.linkedin_voyager.query_id.clone(),
 
             radar_hours: c.server.radar_hours,
         }
@@ -150,6 +173,35 @@ impl Settings {
     /// a zero cap that stops all alerts, a floor above the exceptional bar that
     /// silently drops everything, an inverted tier ladder.
     pub fn sanitize(&mut self) {
+        // The mode owns the toggles. Without this, switching to "posts" and
+        // then flipping a checkbox leaves the UI claiming one thing and the
+        // crawl loops doing another.
+        match self.mode.as_str() {
+            "boards" => {
+                self.greenhouse_enabled = true;
+                self.linkedin_guest_enabled = false;
+                self.voyager_enabled = false;
+            }
+            "posts" => {
+                self.greenhouse_enabled = false;
+                self.linkedin_guest_enabled = false;
+                self.voyager_enabled = true;
+            }
+            "all" => {
+                self.greenhouse_enabled = true;
+                self.linkedin_guest_enabled = true;
+                self.voyager_enabled = true;
+            }
+            _ => self.mode = "custom".into(),
+        }
+
+        for q in self.voyager_queries.iter_mut() {
+            *q = q.trim().to_string();
+        }
+        self.voyager_queries.retain(|q| !q.is_empty());
+        self.voyager_queries.dedup();
+        self.voyager_query_id = self.voyager_query_id.trim().to_string();
+
         self.per_hour_cap = self.per_hour_cap.clamp(1, 100);
         self.per_poster_cap = self.per_poster_cap.clamp(1, self.per_hour_cap);
         self.score_floor = self.score_floor.clamp(0.0, 99.0);

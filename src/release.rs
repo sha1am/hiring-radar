@@ -128,6 +128,8 @@ fn to_raw(c: &crate::model::Candidate) -> crate::model::RawPost {
         body: c.body.clone(),
         posted_at: c.posted_at,
         apply: c.apply(),
+        // Only used to regenerate a draft; the scorer never sees this one.
+        synthetic_title: false,
     }
 }
 

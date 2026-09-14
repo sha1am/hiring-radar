@@ -43,8 +43,21 @@ impl Scorer for LexicalScorer {
 
         let mut s = 0.0f64;
 
+        // A feed post has no title field — `title` is just its first line — so
+        // matching target job titles against it is close to meaningless. Rather
+        // than handing every such post a structural zero (which would park the
+        // entire LinkedIn-posts mode below the floor), the title budget moves
+        // into content, where the post's actual text can earn it.
+        let content_budget = if post.synthetic_title {
+            CONTENT + TITLE_FULL
+        } else {
+            CONTENT
+        };
+
         // --- title: the strongest single signal ---
-        if p.titles.iter().any(|t| title.contains(&t.to_lowercase())) {
+        if post.synthetic_title {
+            // no title signal available
+        } else if p.titles.iter().any(|t| title.contains(&t.to_lowercase())) {
             s += TITLE_FULL;
         } else {
             let title_words: Vec<String> = p
@@ -65,7 +78,7 @@ impl Scorer for LexicalScorer {
 
         // --- content: resume similarity, keyword coverage, or a blend ---
         let (content_frac, matched) = content_score(post, p, m, &hay);
-        s += content_frac * CONTENT;
+        s += content_frac * content_budget;
 
         // --- location ---
         let loc_hay = post
@@ -85,9 +98,11 @@ impl Scorer for LexicalScorer {
         }
 
         // --- seniority ---
+        // For a feed post the level words are in the body, not the first line.
+        let level_hay: &str = if post.synthetic_title { &hay } else { &title };
         let junior = ["intern", "internship", "junior", "fresher", "trainee", "graduate"]
             .iter()
-            .any(|w| title.contains(w));
+            .any(|w| level_hay.contains(w));
         let senior_wanted = p.seniority.iter().any(|w| {
             let w = w.to_lowercase();
             w.contains("senior")
@@ -98,7 +113,7 @@ impl Scorer for LexicalScorer {
         });
         if senior_wanted && junior {
             s += SENIORITY_MISS;
-        } else if p.seniority.iter().any(|w| title.contains(&w.to_lowercase())) {
+        } else if p.seniority.iter().any(|w| level_hay.contains(&w.to_lowercase())) {
             s += SENIORITY_HIT;
         }
 
@@ -220,6 +235,83 @@ pub fn priority(score: f64, posted_at: Option<i64>, detected_at: i64, now: i64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ApplyChannel;
+    use crate::resume::Matcher;
+    use crate::settings::Settings;
+
+    fn profile() -> Settings {
+        let mut s: Settings = serde_json::from_str("{}").expect("all fields default");
+        s.titles = vec!["backend engineer".into(), "software engineer".into()];
+        s.keywords = vec![
+            "golang".into(),
+            "kafka".into(),
+            "postgres".into(),
+            "kubernetes".into(),
+        ];
+        s.locations = vec!["bengaluru".into()];
+        s.seniority = vec!["senior".into()];
+        s.remote_ok = true;
+        s
+    }
+
+    fn post(title: &str, body: &str, synthetic: bool) -> RawPost {
+        RawPost {
+            source: "test".into(),
+            external_id: "1".into(),
+            url: "https://example.test/1".into(),
+            title: title.into(),
+            company: "Someone".into(),
+            location: None,
+            body: body.into(),
+            posted_at: None,
+            apply: ApplyChannel::Unknown,
+            synthetic_title: synthetic,
+        }
+    }
+
+    /// The whole LinkedIn-posts mode rests on this. A feed post has no title
+    /// field, so its "title" is just the first line — under the old scoring it
+    /// forfeited the 40-point title budget outright and parked below any sane
+    /// floor, which would have made the mode look broken rather than empty.
+    #[test]
+    fn titleless_feed_post_still_scores() {
+        let p = profile();
+        let m = Matcher::default();
+        let body = "We are hiring! Our team in Bengaluru is looking for a senior \
+                    backend engineer to work on golang services, kafka pipelines, \
+                    postgres and kubernetes. DM me if interested. #hiring";
+
+        // Same text, once as a feed post (no usable title) and once as a listing.
+        let feed = LexicalScorer.score(&post("We are hiring!", body, true), &p, &m).0;
+        let listing = LexicalScorer
+            .score(&post("Senior Backend Engineer", body, false), &p, &m)
+            .0;
+
+        assert!(
+            feed >= 55.0,
+            "a well-matched feed post must clear a normal floor, got {feed}"
+        );
+        // It should land in the same league as the equivalent listing, not 40 adrift.
+        assert!(
+            (feed - listing).abs() < 20.0,
+            "feed {feed} and listing {listing} should be comparable"
+        );
+    }
+
+    /// Redistributing the title budget must not make junk score well.
+    #[test]
+    fn titleless_irrelevant_post_still_loses() {
+        let p = profile();
+        let m = Matcher::default();
+        let junk = post(
+            "Thrilled to share!",
+            "Thrilled to share that I have completed a certification in digital \
+             marketing analytics. Grateful to my mentors. #blessed #marketing",
+            true,
+        );
+        let score = LexicalScorer.score(&junk, &p, &m).0;
+        assert!(score < 40.0, "irrelevant feed post scored {score}");
+    }
 
     #[test]
     fn salary_needs_a_currency_marker_nearby() {
