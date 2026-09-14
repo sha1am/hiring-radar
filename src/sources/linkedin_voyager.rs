@@ -17,11 +17,45 @@ pub struct Voyager {
     client: reqwest::Client,
     cfg: VoyagerCfg,
     user_agent: String,
+    base: String,
+    /// Set once the first deep walk has filled the window. See `pages_for`.
+    backfilled: std::sync::atomic::AtomicBool,
 }
+
+/// Overridable so the pagination and parsing can be exercised against a fixture
+/// server. There is no other way to test this source — it cannot be reached from
+/// a sandbox, and testing it against the real API means risking the account.
+const DEFAULT_BASE: &str = "https://www.linkedin.com/voyager/api/graphql";
 
 impl Voyager {
     pub fn new(client: reqwest::Client, cfg: VoyagerCfg, user_agent: String) -> Self {
-        Self { client, cfg, user_agent }
+        let base = std::env::var("RADAR_VOYAGER_BASE").unwrap_or_else(|_| DEFAULT_BASE.into());
+        if base != DEFAULT_BASE {
+            tracing::warn!(%base, "voyager base URL overridden (fixture mode?)");
+        }
+        Self {
+            client,
+            cfg,
+            user_agent,
+            base,
+            backfilled: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// How many pages this crawl is allowed.
+    ///
+    /// The deep walk exists to fill the window once. Repeating it every 90
+    /// seconds would mean three hashtags times eight pages every cycle —
+    /// roughly a thousand authenticated requests an hour against an API that
+    /// bans accounts for far less. After the window is filled, only new posts
+    /// matter, and new posts are on page one. So: deep once, shallow forever
+    /// after.
+    fn pages_for(&self, live: &Settings) -> u32 {
+        if self.backfilled.load(std::sync::atomic::Ordering::Relaxed) {
+            live.voyager_poll_pages.max(1)
+        } else {
+            live.voyager_max_pages.max(1)
+        }
     }
 
     /// Credentials and the queryId still come from config/env — they are
@@ -74,76 +108,161 @@ impl JobSource for Voyager {
         let csrf = jsession.trim_matches('"');
         let cookie = format!("li_at={li_at}; JSESSIONID=\"{jsession}\"");
 
-        let mut posts = Vec::new();
+        let cutoff = crate::model::now() - live.lookback_hours * 3600;
+        let allowed_pages = self.pages_for(live);
+        let deep = !self.backfilled.load(std::sync::atomic::Ordering::Relaxed);
+        let mut posts: Vec<RawPost> = Vec::new();
 
         // One search per term. Hashtag searches are what surface "we're hiring"
         // posts; a single OR'd blob returns a worse mix than separate passes.
         for term in &live.voyager_queries {
-            let variables = format!(
-                "(query:(keywords:{},flagshipSearchIntent:SEARCH_CONTENT))",
-                urlish(term)
-            );
-            let url = format!(
-                "https://www.linkedin.com/voyager/api/graphql?queryId={}&variables={}",
-                live.voyager_query_id, variables
-            );
+            let mut term_kept = 0usize;
+            let mut pages = 0u32;
+            let mut oldest_seen: Option<i64> = None;
+            let mut exhausted = false;
 
-            let resp = self
-                .client
-                .get(&url)
-                .header("cookie", &cookie)
-                .header("csrf-token", csrf)
-                .header("accept", "application/vnd.linkedin.normalized+json+2.1")
-                .header("x-restli-protocol-version", "2.0.0")
-                .header("x-li-lang", "en_US")
-                .header("user-agent", &self.user_agent)
-                .header("referer", "https://www.linkedin.com/search/results/content/")
-                .send()
-                .await;
+            // Walk back page by page until the window is covered. A single page
+            // is whatever LinkedIn feels like returning — often under an hour on
+            // a busy hashtag — so without this, "everything from the last 24
+            // hours" quietly means "the most recent twenty posts".
+            for page in 0..allowed_pages {
+                pages = page + 1;
+                let start_at = page as usize * PAGE_SIZE;
 
-            let body: Value = match resp {
-                Ok(r) if r.status().is_success() => r.json().await.unwrap_or(Value::Null),
-                Ok(r) => {
-                    let code = r.status().as_u16();
-                    tracing::warn!(term, status = code, "voyager non-200");
-                    out.fail(format!(
-                        "{term}: HTTP {code}{}",
-                        match code {
-                            401 | 403 => " — cookie expired or rejected, refresh li_at",
-                            429 => " — rate limited, widen the poll interval",
-                            400 => " — queryId or variables rejected, the shape changed",
-                            _ => "",
-                        }
-                    ));
-                    continue;
+                // Sorted by date so walking pages walks backwards in time; under
+                // relevance ordering there is no point at which it is safe to stop.
+                let variables = format!(
+                    "(start:{start_at},count:{PAGE_SIZE},query:(keywords:{},flagshipSearchIntent:SEARCH_CONTENT,sortBy:\"date_posted\"))",
+                    urlish(term)
+                );
+                let url = format!(
+                    "{}?queryId={}&variables={}",
+                    self.base, live.voyager_query_id, variables
+                );
+
+                let resp = self
+                    .client
+                    .get(&url)
+                    .header("cookie", &cookie)
+                    .header("csrf-token", csrf)
+                    .header("accept", "application/vnd.linkedin.normalized+json+2.1")
+                    .header("x-restli-protocol-version", "2.0.0")
+                    .header("x-li-lang", "en_US")
+                    .header("user-agent", &self.user_agent)
+                    .header("referer", "https://www.linkedin.com/search/results/content/")
+                    .send()
+                    .await;
+
+                let body: Value = match resp {
+                    Ok(r) if r.status().is_success() => r.json().await.unwrap_or(Value::Null),
+                    Ok(r) => {
+                        let code = r.status().as_u16();
+                        tracing::warn!(term, status = code, page, "voyager non-200");
+                        out.fail(format!(
+                            "{term}: HTTP {code}{}",
+                            match code {
+                                401 | 403 => " — cookie expired or rejected, refresh li_at",
+                                429 => " — rate limited, widen the poll interval or lower max pages",
+                                400 => " — queryId or variables rejected, the shape changed",
+                                _ => "",
+                            }
+                        ));
+                        exhausted = true;
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(term, %e, page, "voyager fetch failed");
+                        out.fail(format!("{term}: unreachable — {}", brief(&e)));
+                        exhausted = true;
+                        break;
+                    }
+                };
+
+                let mut batch: Vec<RawPost> = Vec::new();
+                walk(&body, &mut batch);
+
+                if batch.is_empty() {
+                    if page == 0 {
+                        // A 200 that yields nothing on the FIRST page means the
+                        // JSON shape moved, which is the likeliest way this
+                        // source breaks. Report what the payload actually looked
+                        // like so looks_like_post can be corrected without
+                        // guessing. On a later page it just means we ran out.
+                        out.fail(format!(
+                            "{term}: HTTP 200 but no posts extracted — {}",
+                            shape(&body)
+                        ));
+                    }
+                    exhausted = true;
+                    break;
                 }
-                Err(e) => {
-                    tracing::warn!(term, %e, "voyager fetch failed");
-                    out.fail(format!("{term}: unreachable — {}", brief(&e)));
-                    continue;
+
+                // Keep only what is inside the window; note the oldest thing on
+                // this page to decide whether to keep walking.
+                let mut page_oldest = i64::MAX;
+                for p in batch {
+                    let ts = p.posted_at.unwrap_or_else(crate::model::now);
+                    page_oldest = page_oldest.min(ts);
+                    if ts >= cutoff {
+                        posts.push(p);
+                        term_kept += 1;
+                    }
                 }
-            };
+                oldest_seen = Some(match oldest_seen {
+                    Some(o) => o.min(page_oldest),
+                    None => page_oldest,
+                });
 
-            let before = posts.len();
-            walk(&body, &mut posts);
-            let found = posts.len() - before;
+                // Past the window — everything further back is older still.
+                if page_oldest < cutoff {
+                    exhausted = true;
+                    break;
+                }
 
-            if found == 0 {
-                // A 200 that yields nothing means the JSON shape moved, which is
-                // the single most likely way this source breaks. Report what the
-                // payload actually looked like so the field names in
-                // looks_like_post can be corrected without guessing.
-                out.fail(format!("{term}: HTTP 200 but no posts extracted — {}", shape(&body)));
-            } else {
-                out.ok(format!("{term}: {found} posts"));
+                // Be gentle. Pagination multiplies request volume against an
+                // API that bans accounts, so pace it rather than hammering.
+                tokio::time::sleep(std::time::Duration::from_millis(PAGE_DELAY_MS)).await;
+            }
+
+            if term_kept > 0 || !out.notes.iter().any(|n| n.text.starts_with(term.as_str())) {
+                let reach = match oldest_seen {
+                    Some(o) => {
+                        let hrs = ((crate::model::now() - o) as f64 / 3600.0).max(0.0);
+                        format!(", reached {hrs:.1}h back")
+                    }
+                    None => String::new(),
+                };
+                out.ok(format!(
+                    "{term}: {term_kept} posts in last {}h ({pages} page{}{reach}){}",
+                    live.lookback_hours,
+                    if pages == 1 { "" } else { "s" },
+                    if exhausted { "" } else { ", page limit hit" },
+                ));
             }
         }
 
-        tracing::info!(found = posts.len(), "voyager content search");
+        // Only mark the window filled if something actually came back — a run
+        // that failed on every term must not downgrade the next one to a
+        // single page and quietly leave the window half-empty forever.
+        if deep && !posts.is_empty() {
+            self.backfilled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            tracing::info!(
+                posts = posts.len(),
+                "voyager window filled; later crawls poll shallow"
+            );
+        }
+
+        tracing::info!(found = posts.len(), deep, "voyager content search");
         out.posts = posts;
         Ok(out)
     }
 }
+
+/// Results per request. LinkedIn caps this; 20 is the web app's own value.
+const PAGE_SIZE: usize = 20;
+/// Pause between pages of the same search.
+const PAGE_DELAY_MS: u64 = 700;
 
 /// A one-line description of an unexpected payload: top-level keys and the size
 /// of the usual containers. Enough to tell "auth wall" from "renamed fields".
@@ -233,6 +352,7 @@ fn looks_like_post(map: &serde_json::Map<String, Value>) -> Option<RawPost> {
 
     let url = profile_url.unwrap_or_else(|| format!("https://www.linkedin.com/feed/update/{urn}"));
 
+    let external_id_for_time = urn.clone();
     Some(RawPost {
         source: "linkedin_voyager".into(),
         external_id: urn,
@@ -241,7 +361,8 @@ fn looks_like_post(map: &serde_json::Map<String, Value>) -> Option<RawPost> {
         company: author,
         location: None,
         body: text.to_string(),
-        posted_at: None,
+        // Voyager reports no timestamp; the activity id carries one.
+        posted_at: crate::timeparse::from_linkedin_urn(&external_id_for_time),
         url,
         apply,
         // A feed post has no title; this is its first line.

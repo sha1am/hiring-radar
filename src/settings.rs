@@ -106,6 +106,22 @@ pub struct Settings {
     /// which is mounted read-only and would need a rebuild to change.
     #[serde(default)]
     pub voyager_query_id: String,
+    /// How far back a feed search walks, in hours. This is what makes "every
+    /// #hiring post from the last 24 hours" true rather than "the most recent
+    /// page of them" — one request returns one page, which on a busy hashtag
+    /// can be under an hour.
+    #[serde(default = "def_lookback_hours")]
+    pub lookback_hours: i64,
+    /// Hard ceiling on pages per search per crawl. Pagination multiplies
+    /// request volume against an API that bans accounts, so the window is a
+    /// target and this is the safety limit.
+    #[serde(default = "def_max_pages")]
+    pub voyager_max_pages: u32,
+    /// Pages per search on every crawl AFTER the window has been filled once.
+    /// New posts are on page one, so this stays small — the deep walk is a
+    /// one-off, not a heartbeat.
+    #[serde(default = "def_poll_pages")]
+    pub voyager_poll_pages: u32,
 
     // ---- dashboard ----
     #[serde(default = "def_radar_hours")]
@@ -131,6 +147,9 @@ fn def_adaptive_end() -> f64 { 70.0 }
 fn def_radar_hours() -> i64 { 24 }
 fn def_mode() -> String { "all".into() }
 fn def_location_policy() -> String { "prefer".into() }
+fn def_lookback_hours() -> i64 { 24 }
+fn def_max_pages() -> u32 { 5 }
+fn def_poll_pages() -> u32 { 2 }
 fn def_true() -> bool { true }
 fn def_voyager_queries() -> Vec<String> {
     vec!["#hiring".into(), "#hiringnow".into(), "#nowhiring".into()]
@@ -183,6 +202,9 @@ impl Settings {
             voyager_enabled: c.linkedin_voyager.enabled,
             voyager_queries: def_voyager_queries(),
             voyager_query_id: c.linkedin_voyager.query_id.clone(),
+            lookback_hours: def_lookback_hours(),
+            voyager_max_pages: def_max_pages(),
+            voyager_poll_pages: def_poll_pages(),
 
             radar_hours: c.server.radar_hours,
         }
@@ -228,6 +250,9 @@ impl Settings {
         self.voyager_queries.retain(|q| !q.is_empty());
         self.voyager_queries.dedup();
         self.voyager_query_id = self.voyager_query_id.trim().to_string();
+        self.lookback_hours = self.lookback_hours.clamp(1, 24 * 14);
+        self.voyager_max_pages = self.voyager_max_pages.clamp(1, 25);
+        self.voyager_poll_pages = self.voyager_poll_pages.clamp(1, self.voyager_max_pages);
 
         self.per_hour_cap = self.per_hour_cap.clamp(1, 100);
         self.per_poster_cap = self.per_poster_cap.clamp(1, self.per_hour_cap);

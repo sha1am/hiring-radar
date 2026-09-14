@@ -557,6 +557,9 @@ struct SettingsForm {
     voyager_enabled: Option<String>,
     voyager_queries: Option<String>,
     voyager_query_id: Option<String>,
+    lookback_hours: Option<String>,
+    voyager_max_pages: Option<String>,
+    voyager_poll_pages: Option<String>,
 
     radar_hours: Option<String>,
     resume_weight: Option<String>,
@@ -676,6 +679,9 @@ async fn settings_save(
     if let Some(v) = &f.voyager_query_id {
         s.voyager_query_id = v.trim().to_string();
     }
+    s.lookback_hours = num(&f.lookback_hours, s.lookback_hours);
+    s.voyager_max_pages = num(&f.voyager_max_pages, s.voyager_max_pages);
+    s.voyager_poll_pages = num(&f.voyager_poll_pages, s.voyager_poll_pages);
     // Set the mode LAST: sanitize() lets it overrule the individual toggles, so
     // reading it after them means the radio wins over stale checkbox state.
     if let Some(v) = &f.mode {
@@ -947,6 +953,12 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
       {voy_on}
       {voy_queries}
       {voy_qid}
+      <div class="grid grid-cols-3 gap-3">
+        {voy_hours}
+        {voy_pages}
+        {voy_poll}
+      </div>
+      <p class="text-xs text-slate-500">The first crawl walks back far enough to fill the window; every crawl after that only reads the newest page or two, because new posts are on page one and repeating the deep walk every 90 seconds is how accounts get banned.</p>
       <p class="text-xs text-slate-500">Your <code>li_at</code> cookie stays in <code>.env</code> &mdash; secrets don't belong in a web form. The queryId is not a secret, just a constant that breaks whenever LinkedIn ships, so it lives here.</p>
     </section>
 
@@ -1004,6 +1016,9 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
         li_queries = ta("linkedin_queries", "LinkedIn queries", "One per line: keywords | location", &queries, 3),
         voy_on = check("voyager_enabled", "LinkedIn feed posts — authenticated, fragile, ban risk", s.voyager_enabled),
         voy_queries = ta("voyager_queries", "Feed searches", "One per line. Hashtags work best: #hiring, #hiringnow. Each runs as its own search.", &s.voyager_queries, 4),
+        voy_hours = numf("lookback_hours", "Collect posts from the last (h)", s.lookback_hours.to_string(), "1"),
+        voy_pages = numf("voyager_max_pages", "Pages on first fill", s.voyager_max_pages.to_string(), "1"),
+        voy_poll = numf("voyager_poll_pages", "Pages when polling", s.voyager_poll_pages.to_string(), "1"),
         voy_qid = textf("voyager_query_id", "Voyager queryId", &s.voyager_query_id, "voyagerSearchDashClusters.xxxxxxxx — copy from DevTools → Network on a content search"),
         cap = numf("per_hour_cap", "Alerts / hour", s.per_hour_cap.to_string(), "1"),
         poster = numf("per_poster_cap", "Per company / hour", s.per_poster_cap.to_string(), "1"),

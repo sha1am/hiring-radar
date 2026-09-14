@@ -50,6 +50,36 @@ fn plausible(ts: i64) -> Option<i64> {
     Some(ts)
 }
 
+/// Recover a post time from a LinkedIn activity/share URN.
+///
+/// LinkedIn's activity IDs are Snowflake-style: the high 41 bits of the 64-bit
+/// id are the creation time in milliseconds. So `id >> 22` is when the post was
+/// made, with no extra request.
+///
+/// This matters more than it looks. Voyager reports no timestamp field, so
+/// without this a "last 24 hours" window silently measures *when we crawled*
+/// rather than when anything was posted — a week-old post looks brand new the
+/// moment it is first seen, and freshness ranking is meaningless.
+///
+/// The bit layout is undocumented and could change, so the result is put
+/// through the same plausibility gate as everything else: if the arithmetic is
+/// wrong the answer lands decades away and is rejected, and the caller falls
+/// back to detection time. Wrong-but-plausible is the only failure this cannot
+/// catch, and a shifted layout would not be subtly wrong, it would be absurd.
+pub fn from_linkedin_urn(urn: &str) -> Option<i64> {
+    // urn:li:activity:7123456789012345678 — also share:, ugcPost:, etc.
+    let id_str = urn.rsplit(':').next()?.trim();
+    if id_str.is_empty() || !id_str.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let id: u64 = id_str.parse().ok()?;
+    let ms = id >> 22;
+    if ms == 0 {
+        return None;
+    }
+    plausible((ms / 1000) as i64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,6 +107,31 @@ mod tests {
     fn parses_epoch_millis() {
         let n = now();
         assert_eq!(parse(&format!("{}", n * 1000)), Some(n));
+    }
+
+    #[test]
+    fn decodes_a_linkedin_activity_urn() {
+        // Build an id the way LinkedIn does: known time in the high bits.
+        let target_ms = (now() as u64 - 3600) * 1000;
+        let id: u64 = target_ms << 22;
+        let urn = format!("urn:li:activity:{id}");
+        let decoded = from_linkedin_urn(&urn).expect("should decode");
+        // Sub-second precision is lost to the shift; a second either way is fine.
+        assert!(
+            (decoded - (now() - 3600)).abs() <= 1,
+            "decoded {decoded}, wanted about {}",
+            now() - 3600
+        );
+    }
+
+    #[test]
+    fn urn_decoding_rejects_nonsense_rather_than_inventing_a_date() {
+        assert_eq!(from_linkedin_urn("urn:li:activity:notanumber"), None);
+        assert_eq!(from_linkedin_urn("urn:li:activity:1"), None); // year 1970
+        assert_eq!(from_linkedin_urn(""), None);
+        // A plainly wrong bit layout must fail the plausibility gate, not
+        // silently produce a date in the far future.
+        assert_eq!(from_linkedin_urn("urn:li:activity:99999999999999999999"), None);
     }
 
     #[test]

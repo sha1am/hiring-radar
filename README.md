@@ -129,6 +129,35 @@ hiring, not formal listings. Setup:
    Each runs as its own search rather than one OR'd blob, which returns a better
    mix.
 
+### Covering a window
+
+"Every #hiring post from the last 24 hours" needs two things that one request
+does not give you.
+
+**Real post times.** Voyager reports no timestamp, so a 24-hour window would
+otherwise measure when *we crawled*, not when anything was posted — a week-old
+post looks brand new the moment it is first seen. LinkedIn activity ids are
+Snowflake-style, with creation time in the high 41 bits, so the time comes out
+of the URN with no extra request. The bit layout is undocumented, so the result
+goes through the same plausibility gate as every other timestamp: if it is
+wrong the answer lands decades away, gets rejected, and detection time is used
+instead.
+
+**Pagination.** One request returns one page, which on a busy hashtag can be
+under an hour. Each search now walks back page by page until it passes the
+window, sorted by date so walking pages walks backwards in time.
+
+That walk happens **once**. Repeating it every crawl would be three hashtags
+times eight pages every 90 seconds — roughly a thousand authenticated requests
+an hour against an API that bans accounts for much less. Once the window is
+filled, only new posts matter and new posts are on page one, so later crawls
+read `Pages when polling` (default 2) instead. Both are in Settings, along with
+`Collect posts from the last (h)`.
+
+If a search hits its page limit before covering the window, the status panel
+says so — `#hiring: 100 posts in last 24h (5 pages, reached 16.5h back), page
+limit hit` — rather than quietly giving you a partial window.
+
 A feed post has no title field, so its "title" is just the first line. Matching
 job titles against that is meaningless, so for these posts the title budget is
 redistributed into the content score, where the post's own text can earn it.
