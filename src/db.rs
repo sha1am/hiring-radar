@@ -1,5 +1,7 @@
 use crate::model::{now, Candidate};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use sqlx::SqlitePool;
 use std::str::FromStr;
 
@@ -28,6 +30,9 @@ const SCHEMA: &[&str] = &[
         notified_at INTEGER
     )",
     "CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status, priority DESC)",
+    // The radar view filters on effective post time across every status.
+    "CREATE INDEX IF NOT EXISTS idx_candidates_seen_at
+       ON candidates(COALESCE(posted_at, detected_at) DESC)",
     // Notification log — the source of truth for the rolling budget + exactly-once.
     "CREATE TABLE IF NOT EXISTS notifications (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,8 +59,13 @@ const SCHEMA: &[&str] = &[
 ];
 
 pub async fn connect(url: &str) -> anyhow::Result<SqlitePool> {
+    // WAL matters here: N crawl loops, the release ticker and every web handler
+    // write through one pool. In rollback-journal mode a writer also blocks
+    // readers, which shows up as a dashboard that stalls mid-crawl.
     let opts = SqliteConnectOptions::from_str(url)?
         .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
         .busy_timeout(std::time::Duration::from_secs(5));
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -118,13 +128,21 @@ pub struct NewCandidate {
     pub draft_body: Option<String>,
 }
 
-pub async fn insert_candidate(pool: &SqlitePool, c: &NewCandidate) -> anyhow::Result<()> {
+/// `status` is 'scored' for live detections and 'backfilled' for the first
+/// crawl of a source. Backfilled rows are visible on the dashboard but are
+/// excluded from `eligible()`, so history populates the radar without ever
+/// firing a notification.
+pub async fn insert_candidate(
+    pool: &SqlitePool,
+    c: &NewCandidate,
+    status: &str,
+) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO candidates
          (urn, source, url, title, company, location, body, score, priority, tier, status,
           detected_at, posted_at, expires_at, settle_until, apply_kind, apply_target,
           draft_subject, draft_body)
-         VALUES (?,?,?,?,?,?,?,?,?,?, 'scored', ?,?,?,?,?,?,?,?)
+         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?)
          ON CONFLICT(urn) DO NOTHING",
     )
     .bind(&c.urn)
@@ -137,6 +155,7 @@ pub async fn insert_candidate(pool: &SqlitePool, c: &NewCandidate) -> anyhow::Re
     .bind(c.score)
     .bind(c.priority)
     .bind(&c.tier)
+    .bind(status)
     .bind(c.detected_at)
     .bind(c.posted_at)
     .bind(c.expires_at)
@@ -197,6 +216,55 @@ pub async fn eligible(pool: &SqlitePool) -> anyhow::Result<Vec<Candidate>> {
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Everything the radar has seen in the trailing window, whatever its status —
+/// this is the "what's out there" view, as opposed to `active()` which is
+/// "what's waiting on you". Ordered by effective post time so the newest
+/// listing is first; the caller re-ranks by score if it wants.
+pub async fn recent(
+    pool: &SqlitePool,
+    window_secs: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<Candidate>> {
+    let cutoff = now() - window_secs;
+    let rows = sqlx::query_as::<_, Candidate>(
+        "SELECT * FROM candidates
+         WHERE COALESCE(posted_at, detected_at) > ?
+         ORDER BY COALESCE(posted_at, detected_at) DESC
+         LIMIT ?",
+    )
+    .bind(cutoff)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// How many rows the radar is holding, for the dashboard counter.
+pub async fn recent_count(pool: &SqlitePool, window_secs: i64) -> anyhow::Result<i64> {
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM candidates WHERE COALESCE(posted_at, detected_at) > ?",
+    )
+    .bind(now() - window_secs)
+    .fetch_one(pool)
+    .await?;
+    Ok(n)
+}
+
+/// Drop rows far outside any window anyone looks at. `seen` is deliberately
+/// NOT pruned — it is what stops a re-crawl from re-notifying, so it has to
+/// outlive the candidate row.
+pub async fn prune_candidates(pool: &SqlitePool, older_than_secs: i64) -> anyhow::Result<u64> {
+    let res = sqlx::query(
+        "DELETE FROM candidates
+         WHERE COALESCE(posted_at, detected_at) < ?
+           AND status NOT IN ('notified','sent','applied')",
+    )
+    .bind(now() - older_than_secs)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
 }
 
 pub async fn get(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<Candidate>> {

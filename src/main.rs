@@ -104,9 +104,28 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             let mut iv = tokio::time::interval(Duration::from_secs(tick));
             loop {
+                // interval fires immediately on the first tick, so a restart
+                // with a full pool doesn't idle for tick_secs before releasing.
                 iv.tick().await;
                 if let Err(e) = release::run(&st).await {
                     tracing::warn!(%e, "release tick failed");
+                }
+            }
+        });
+    }
+
+    // ---- housekeeping: drop rows nobody can see any more ----
+    {
+        let st = state.clone();
+        let keep = cfg.server.prune_after_days.max(1) * 86400;
+        tokio::spawn(async move {
+            let mut iv = tokio::time::interval(Duration::from_secs(6 * 3600));
+            loop {
+                iv.tick().await;
+                match db::prune_candidates(&st.pool, keep).await {
+                    Ok(n) if n > 0 => tracing::info!(pruned = n, "old candidates dropped"),
+                    Err(e) => tracing::warn!(%e, "prune failed"),
+                    _ => {}
                 }
             }
         });
@@ -141,22 +160,29 @@ async fn crawl_loop(state: AppState, source: Box<dyn JobSource>, interval: u64, 
                 // First non-empty cycle for this source is a backfill: record, don't notify.
                 let bootstrapping = db::seen_count(&state.pool, &name).await.unwrap_or(0) == 0;
                 let mut new_count = 0;
+                let mut backfilled = 0;
                 for post in posts {
                     let urn = post.urn();
                     let is_new = db::record_seen(&state.pool, &urn, &name, bootstrapping)
                         .await
                         .unwrap_or(false);
-                    if bootstrapping || !is_new {
-                        continue; // historical on first run, or already handled
+                    if !is_new {
+                        continue; // already handled on an earlier cycle
                     }
-                    if let Err(e) = pipeline::ingest(&state, post).await {
+                    // On the first crawl we still ingest — the radar needs history
+                    // to show — but as 'backfilled', which can never fire.
+                    if let Err(e) = pipeline::ingest(&state, post, bootstrapping).await {
                         tracing::warn!(source = %name, %e, "ingest failed");
+                    } else if bootstrapping {
+                        backfilled += 1;
                     } else {
                         new_count += 1;
                     }
                 }
                 if bootstrapping {
-                    tracing::info!(source = %name, "bootstrapped (existing posts marked seen)");
+                    tracing::info!(source = %name, backfilled,
+                        "bootstrapped (history on the radar, nothing notified)");
+                    state.notify_ui();
                 } else if new_count > 0 {
                     tracing::info!(source = %name, new_count, "new posts ingested");
                     // Instant path: don't wait for the next tick to fire exceptional matches.

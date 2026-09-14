@@ -111,7 +111,17 @@ pub struct EmailCfg {
 pub struct ServerCfg {
     pub bind: String,
     pub base_url: String,
+    /// Default trailing window for the radar view, in hours. The dashboard can
+    /// override per-request; this is what a fresh page load shows.
+    #[serde(default = "def_radar_hours")]
+    pub radar_hours: i64,
+    /// Candidates older than this are deleted outright, except ones you acted
+    /// on. Keeps SQLite from growing without bound on a busy board set.
+    #[serde(default = "def_prune_days")]
+    pub prune_after_days: i64,
 }
+fn def_radar_hours() -> i64 { 24 }
+fn def_prune_days() -> i64 { 30 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct DraftCfg {

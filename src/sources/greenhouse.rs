@@ -8,11 +8,22 @@ use serde::Deserialize;
 pub struct Greenhouse {
     client: reqwest::Client,
     boards: Vec<String>,
+    base: String,
 }
+
+/// Where the board API lives. Overridable so the pipeline can be exercised
+/// against a fixture server — there is no other way to test ingest end to end
+/// without hitting Greenhouse for real.
+const DEFAULT_BASE: &str = "https://boards-api.greenhouse.io/v1/boards";
 
 impl Greenhouse {
     pub fn new(client: reqwest::Client, boards: Vec<String>) -> Self {
-        Self { client, boards }
+        let base = std::env::var("RADAR_GREENHOUSE_BASE")
+            .unwrap_or_else(|_| DEFAULT_BASE.to_string());
+        if base != DEFAULT_BASE {
+            tracing::warn!(%base, "greenhouse base URL overridden (fixture mode?)");
+        }
+        Self { client, boards, base }
     }
 }
 
@@ -71,9 +82,7 @@ impl JobSource for Greenhouse {
     async fn fetch(&self) -> anyhow::Result<Vec<RawPost>> {
         let mut posts = Vec::new();
         for board in &self.boards {
-            let url = format!(
-                "https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
-            );
+            let url = format!("{}/{board}/jobs?content=true", self.base.trim_end_matches('/'));
             let resp = match self.client.get(&url).send().await {
                 Ok(r) => r,
                 Err(e) => {
