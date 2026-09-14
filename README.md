@@ -99,6 +99,29 @@ It is deliberately not an LLM call: this runs on the instant path for every
 post, and the score you see has to be the one the release engine acted on.
 Nothing about your resume leaves the container.
 
+## Filtering the board
+
+The radar has a filter bar: free text over title, company, place and the matched
+resume terms, plus minimum score, tier, source and status. They compose, and the
+window buttons carry them, so widening from 24h to 7d narrows the same search
+rather than silently resetting it.
+
+Filtering runs in SQL across the whole window, not over the rendered list. The
+query is capped at a few hundred rows, so filtering after the cap would search
+only the newest slice and quietly miss matches further back — the kind of bug
+you would never notice, because a filter that finds nothing looks exactly like a
+filter that works.
+
+A filter matching nothing says so ("No match among the 328 in this window")
+rather than showing the same empty state as a board with nothing on it.
+
+htmx is served from the binary at `/assets/htmx.min.js`, not a CDN. Every
+interactive part of this dashboard is htmx — the filters, saving settings,
+dismiss and apply — so loading it from unpkg means that when you are offline, or
+the CDN has a bad day, a self-hosted tool running in a container on your own
+machine silently loses all of its buttons. Tailwind is still a CDN script; if it
+fails the page is ugly but works.
+
 ## Modes
 
 Settings → Sources has three presets over the individual toggles:

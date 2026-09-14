@@ -330,27 +330,102 @@ pub async fn eligible(pool: &SqlitePool) -> anyhow::Result<Vec<Candidate>> {
     Ok(rows)
 }
 
-/// Everything the radar has seen in the trailing window, whatever its status —
-/// this is the "what's out there" view, as opposed to `active()` which is
-/// "what's waiting on you". Ordered by effective post time so the newest
-/// listing is first; the caller re-ranks by score if it wants.
-pub async fn recent(
+/// What the dashboard is asking the radar to show.
+///
+/// Filtering happens in SQL rather than over the already-rendered list: the
+/// query is capped at a few hundred rows, so filtering after the cap would
+/// search only the newest slice and quietly miss matches further back in the
+/// window.
+#[derive(Debug, Default, Clone)]
+pub struct RadarFilter {
+    /// Free text over title, company, location and the matched resume terms.
+    pub q: String,
+    pub source: String,
+    pub status: String,
+    pub tier: String,
+    pub min_score: f64,
+}
+
+impl RadarFilter {
+    pub fn is_active(&self) -> bool {
+        !self.q.is_empty()
+            || !self.source.is_empty()
+            || !self.status.is_empty()
+            || !self.tier.is_empty()
+            || self.min_score > 0.0
+    }
+}
+
+/// The window, narrowed by whatever the dashboard controls are set to.
+pub async fn recent_filtered(
     pool: &SqlitePool,
     window_secs: i64,
+    f: &RadarFilter,
     limit: i64,
 ) -> anyhow::Result<Vec<Candidate>> {
     let cutoff = now() - window_secs;
+    let like = format!("%{}%", f.q.to_lowercase());
+
     let rows = sqlx::query_as::<_, Candidate>(
         "SELECT * FROM candidates
          WHERE COALESCE(posted_at, detected_at) > ?
+           AND (? = '' OR source = ?)
+           AND (? = '' OR status = ?)
+           AND (? = '' OR tier = ?)
+           AND score >= ?
+           AND (? = '' OR (
+                 lower(title) LIKE ?
+              OR lower(company) LIKE ?
+              OR lower(COALESCE(location, '')) LIKE ?
+              OR lower(COALESCE(match_terms, '')) LIKE ?
+           ))
          ORDER BY COALESCE(posted_at, detected_at) DESC
          LIMIT ?",
     )
     .bind(cutoff)
+    .bind(&f.source)
+    .bind(&f.source)
+    .bind(&f.status)
+    .bind(&f.status)
+    .bind(&f.tier)
+    .bind(&f.tier)
+    .bind(f.min_score)
+    .bind(&f.q)
+    .bind(&like)
+    .bind(&like)
+    .bind(&like)
+    .bind(&like)
     .bind(limit)
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// The distinct sources and statuses actually present in the window, so the
+/// filter dropdowns offer only choices that can return something.
+pub async fn radar_facets(
+    pool: &SqlitePool,
+    window_secs: i64,
+) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+    let cutoff = now() - window_secs;
+    let sources: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT source FROM candidates
+         WHERE COALESCE(posted_at, detected_at) > ? ORDER BY source",
+    )
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await?;
+    let statuses: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT status FROM candidates
+         WHERE COALESCE(posted_at, detected_at) > ? ORDER BY status",
+    )
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await?;
+    Ok((
+        sources.into_iter().map(|(s,)| s).collect(),
+        statuses.into_iter().map(|(s,)| s).collect(),
+    ))
 }
 
 /// How many rows the radar is holding, for the dashboard counter.

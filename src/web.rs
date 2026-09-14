@@ -37,6 +37,7 @@ pub fn router(state: AppState) -> Router {
             post(resume_upload).layer(DefaultBodyLimit::max(20 * 1024 * 1024)),
         )
         .route("/settings/resume/clear", post(resume_clear))
+        .route("/assets/htmx.min.js", get(htmx_asset))
         .with_state(state)
 }
 
@@ -44,9 +45,26 @@ async fn page(State(st): State<AppState>) -> impl IntoResponse {
     let hours = st.settings().await.radar_hours;
     let stat = render_status(&st, hours).await;
     let q = render_queue(&st).await;
-    let r = render_radar(&st, hours).await;
+    let r = render_radar(&st, hours, &RadarQuery::default()).await;
     let h = render_history(&st).await;
     Html(shell(&stat, &q, &r, &h))
+}
+
+/// htmx is served from the binary rather than a CDN.
+///
+/// Every interactive part of this dashboard is htmx — the filters, saving
+/// settings, dismiss and apply. Loading it from unpkg means that when you are
+/// offline, or the CDN has a bad day, a self-hosted tool running in a container
+/// on your own machine silently loses all of its buttons. 48KB embedded is a
+/// cheap way to never think about that again.
+async fn htmx_asset() -> impl IntoResponse {
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        include_str!("../assets/htmx.min.js"),
+    )
 }
 
 async fn status_fragment(State(st): State<AppState>) -> impl IntoResponse {
@@ -58,15 +76,88 @@ async fn queue(State(st): State<AppState>) -> impl IntoResponse {
     Html(render_queue(&st).await)
 }
 
-#[derive(Deserialize)]
+#[derive(Default)]
 struct RadarQuery {
     hours: Option<i64>,
+    q: String,
+    source: String,
+    status: String,
+    tier: String,
+    min: String,
 }
 
-async fn radar(State(st): State<AppState>, Query(q): Query<RadarQuery>) -> impl IntoResponse {
+impl RadarQuery {
+    /// Built from a map rather than derived, because htmx can legitimately send
+    /// the same key twice — a control with its own query string plus an
+    /// inherited hx-include that also carries it. A derived extractor rejects
+    /// that with a 400, which reaches the page as a control that simply stops
+    /// working. Last value wins.
+    fn from_map(m: &std::collections::HashMap<String, String>) -> Self {
+        let get = |k: &str| m.get(k).cloned().unwrap_or_default();
+        Self {
+            hours: m.get("hours").and_then(|v| v.parse::<i64>().ok()),
+            q: get("q"),
+            source: get("source"),
+            status: get("status"),
+            tier: get("tier"),
+            min: get("min"),
+        }
+    }
+}
+
+impl RadarQuery {
+    fn filter(&self) -> db::RadarFilter {
+        db::RadarFilter {
+            q: self.q.trim().to_lowercase(),
+            source: self.source.trim().to_string(),
+            status: self.status.trim().to_string(),
+            tier: self.tier.trim().to_string(),
+            min_score: self.min.trim().parse::<f64>().unwrap_or(0.0).clamp(0.0, 100.0),
+        }
+    }
+
+    /// The current filter state as a query string, so the window buttons and
+    /// any other control can carry it rather than silently resetting it.
+    fn qs(&self, hours: i64) -> String {
+        let mut p = vec![format!("hours={hours}")];
+        for (k, v) in [
+            ("q", self.q.as_str()),
+            ("source", self.source.as_str()),
+            ("status", self.status.as_str()),
+            ("tier", self.tier.as_str()),
+            ("min", self.min.as_str()),
+        ] {
+            if !v.trim().is_empty() {
+                p.push(format!("{k}={}", urlencode(v.trim())));
+            }
+        }
+        p.join("&")
+    }
+}
+
+/// Minimal percent-encoding for values going back into an hx-get URL.
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+async fn radar(
+    State(st): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let q = RadarQuery::from_map(&params);
     let default_hours = st.settings().await.radar_hours;
     let hours = q.hours.unwrap_or(default_hours).clamp(1, 24 * 30);
-    Html(render_radar(&st, hours).await)
+    Html(render_radar(&st, hours, &q).await)
 }
 
 /// SSE stream: every queue change pushes a tick; the browser reloads the lists.
@@ -358,28 +449,112 @@ fn radar_row(c: &Candidate) -> String {
     )
 }
 
-fn window_button(hours: i64, active: i64, label: &str) -> String {
+fn window_button(hours: i64, active: i64, label: &str, q: &RadarQuery) -> String {
     let cls = if hours == active {
         "bg-slate-700 text-slate-100"
     } else {
         "text-slate-500 hover:text-slate-300"
     };
+    // Carries the current filters, so changing the window narrows the same
+    // search rather than silently clearing it.
     format!(
-        r##"<button hx-get="/radar?hours={hours}" hx-target="#radar" hx-swap="outerHTML"
+        r##"<button hx-get="/radar?{qs}" hx-target="#radar" hx-swap="outerHTML"
       class="px-2 py-0.5 rounded text-xs {cls}">{label}</button>"##,
-        hours = hours,
+        qs = q.qs(hours),
         cls = cls,
         label = label
+    )
+}
+
+fn opt_tag(value: &str, label: &str, selected: &str) -> String {
+    format!(
+        r##"<option value="{v}" {sel}>{l}</option>"##,
+        v = esc(value),
+        l = esc(label),
+        sel = if value == selected { "selected" } else { "" }
+    )
+}
+
+/// The filter bar.
+///
+/// Every control posts the whole bar (hx-include), so the filters compose
+/// instead of each one resetting the others. Filtering runs in SQL over the
+/// whole window — filtering the rendered list would only search the newest few
+/// hundred rows and miss matches further back.
+fn filter_bar(q: &RadarQuery, hours: i64, sources: &[String], statuses: &[String]) -> String {
+    let src_opts: String = std::iter::once(opt_tag("", "any source", &q.source))
+        .chain(
+            sources
+                .iter()
+                .map(|s| opt_tag(s, source_label(s), &q.source)),
+        )
+        .collect();
+    let status_opts: String = std::iter::once(opt_tag("", "any status", &q.status))
+        .chain(statuses.iter().map(|s| {
+            let (_, label) = status_chip(s);
+            opt_tag(s, label, &q.status)
+        }))
+        .collect();
+    let tier_opts: String = [("", "any tier"), ("exceptional", "exceptional"), ("strong", "strong"), ("marginal", "marginal")]
+        .iter()
+        .map(|(v, l)| opt_tag(v, l, &q.tier))
+        .collect();
+    let min_opts: String = [("", "any score"), ("50", "50+"), ("65", "65+"), ("75", "75+"), ("85", "85+")]
+        .iter()
+        .map(|(v, l)| opt_tag(v, l, &q.min))
+        .collect();
+
+    let sel = "rounded-md bg-slate-900/60 border border-slate-700 px-2 py-1 text-xs text-slate-300";
+    let clear = if q.filter().is_active() {
+        format!(
+            // hx-include is inherited from the wrapper, so without unsetting it
+            // "clear" would helpfully re-send everything it is meant to clear.
+            r##"<button hx-get="/radar?hours={hours}" hx-target="#radar" hx-swap="outerHTML"
+        hx-include="unset"
+        class="text-xs text-slate-500 hover:text-slate-300 underline">clear</button>"##,
+            hours = hours
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        r##"<div id="radar-filters" class="mt-2 flex flex-wrap items-center gap-2"
+     hx-get="/radar" hx-target="#radar" hx-swap="outerHTML"
+     hx-include="#radar-filters [name]" hx-trigger="change">
+  <input type="hidden" name="hours" value="{hours}"/>
+  <input type="search" name="q" value="{q_val}" placeholder="search title, company, place, matched terms"
+    class="flex-1 min-w-[12rem] rounded-md bg-slate-900/60 border border-slate-700 px-2 py-1 text-xs"
+    hx-get="/radar" hx-target="#radar" hx-swap="outerHTML"
+    hx-include="#radar-filters [name]" hx-trigger="keyup changed delay:350ms, search, change"/>
+  <select name="min" class="{sel}">{min_opts}</select>
+  <select name="tier" class="{sel}">{tier_opts}</select>
+  <select name="source" class="{sel}">{src_opts}</select>
+  <select name="status" class="{sel}">{status_opts}</select>
+  {clear}
+</div>"##,
+        hours = hours,
+        q_val = esc(&q.q),
+        sel = sel,
+        min_opts = min_opts,
+        tier_opts = tier_opts,
+        src_opts = src_opts,
+        status_opts = status_opts,
+        clear = clear
     )
 }
 
 /// Everything seen in the trailing window, not just what fired. This is the
 /// "what's out there" half of the dashboard — history included, so the board is
 /// useful on the very first run instead of empty until something new posts.
-async fn render_radar(st: &AppState, hours: i64) -> String {
+async fn render_radar(st: &AppState, hours: i64, q: &RadarQuery) -> String {
     let window = hours * 3600;
-    let mut items = db::recent(&st.pool, window, 300).await.unwrap_or_default();
+    let filter = q.filter();
+    let mut items = db::recent_filtered(&st.pool, window, &filter, 300)
+        .await
+        .unwrap_or_default();
     let total = db::recent_count(&st.pool, window).await.unwrap_or(0);
+    let (sources, statuses) = db::radar_facets(&st.pool, window).await.unwrap_or_default();
 
     // Best match first — the list is for scanning, not for chronology.
     items.sort_by(|a, b| {
@@ -388,7 +563,15 @@ async fn render_radar(st: &AppState, hours: i64) -> String {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let rows = if items.is_empty() {
+    let rows = if items.is_empty() && filter.is_active() {
+        // Distinguish "your filter matched nothing" from "nothing has arrived",
+        // which otherwise look identical and send you debugging the wrong thing.
+        format!(
+            r##"<p class="text-slate-500 text-sm py-6 text-center">No match among the {total} in this window. <button hx-get="/radar?hours={hours}" hx-target="#radar" hx-swap="outerHTML" class="underline hover:text-slate-300">clear the filters</button>.</p>"##,
+            total = total,
+            hours = hours
+        )
+    } else if items.is_empty() {
         r##"<p class="text-slate-500 text-sm py-6 text-center">Nothing in this window yet. Widen it, or give the first crawl a minute.</p>"##.to_string()
     } else {
         format!(
@@ -397,7 +580,9 @@ async fn render_radar(st: &AppState, hours: i64) -> String {
         )
     };
 
-    let shown = if total > items.len() as i64 {
+    let shown = if filter.is_active() {
+        format!(", {} shown", items.len())
+    } else if total > items.len() as i64 {
         format!(" (showing top {})", items.len())
     } else {
         String::new()
@@ -411,15 +596,17 @@ async fn render_radar(st: &AppState, hours: i64) -> String {
     </h2>
     <div class="flex items-center gap-1 shrink-0">{b6}{b24}{b72}{b168}</div>
   </div>
+  {filters}
   {rows}
 </section>"##,
         total = total,
         hours = hours,
         shown = shown,
-        b6 = window_button(6, hours, "6h"),
-        b24 = window_button(24, hours, "24h"),
-        b72 = window_button(72, hours, "3d"),
-        b168 = window_button(168, hours, "7d"),
+        b6 = window_button(6, hours, "6h", q),
+        b24 = window_button(24, hours, "24h", q),
+        b72 = window_button(72, hours, "3d", q),
+        b168 = window_button(168, hours, "7d", q),
+        filters = filter_bar(q, hours, &sources, &statuses),
         rows = rows
     )
 }
@@ -467,7 +654,7 @@ fn shell(status: &str, queue: &str, radar: &str, history: &str) -> String {
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Hiring Radar</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="/assets/htmx.min.js"></script>
 </head>
 <body class="bg-slate-950 text-slate-200 min-h-screen">
   <div class="max-w-3xl mx-auto px-4 py-8">
@@ -493,9 +680,16 @@ fn shell(status: &str, queue: &str, radar: &str, history: &str) -> String {
     function reloadAll() {{
       htmx.ajax('GET', '/status', {{target:'#status', swap:'outerHTML'}});
       htmx.ajax('GET', '/queue', {{target:'#queue', swap:'outerHTML'}});
-      const active = document.querySelector('#radar button.bg-slate-700');
-      const hours = active ? new URL(active.getAttribute('hx-get'), location.origin).searchParams.get('hours') : '24';
-      htmx.ajax('GET', '/radar?hours=' + hours, {{target:'#radar', swap:'outerHTML'}});
+      // Rebuild the current filter state from the bar so a live update does
+      // not silently reset what you were looking at.
+      const bar = document.getElementById('radar-filters');
+      let qs = '';
+      if (bar) {{
+        const p = new URLSearchParams();
+        bar.querySelectorAll('[name]').forEach(el => {{ if (el.value) p.set(el.name, el.value); }});
+        qs = p.toString();
+      }}
+      htmx.ajax('GET', '/radar?' + qs, {{target:'#radar', swap:'outerHTML'}});
       htmx.ajax('GET', '/', {{target:'#history', swap:'none'}});
     }}
     function copyBody(id) {{

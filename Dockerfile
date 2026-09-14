@@ -21,7 +21,9 @@ RUN mkdir -p src \
  && cargo build --release \
  && rm -rf src
 
-# Real sources. Touch main.rs so cargo invalidates only this crate.
+# Real sources. assets/ is include_str!'d into the binary (htmx), so it has to
+# be present at build time.
+COPY assets ./assets
 COPY src ./src
 RUN touch src/main.rs \
  && cargo build --release \
