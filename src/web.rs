@@ -3,6 +3,7 @@ use crate::model::Candidate;
 use crate::notify;
 use crate::settings::{parse_list, Query as LiQuery, Settings};
 use crate::state::AppState;
+use crate::status::{diagnosis, since, until, Level};
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse};
@@ -23,6 +24,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(page))
         .route("/queue", get(queue))
         .route("/radar", get(radar))
+        .route("/status", get(status_fragment))
         .route("/events", get(events))
         .route("/candidate/:id/send", post(send))
         .route("/candidate/:id/dismiss", post(dismiss))
@@ -40,10 +42,16 @@ pub fn router(state: AppState) -> Router {
 
 async fn page(State(st): State<AppState>) -> impl IntoResponse {
     let hours = st.settings().await.radar_hours;
+    let stat = render_status(&st, hours).await;
     let q = render_queue(&st).await;
     let r = render_radar(&st, hours).await;
     let h = render_history(&st).await;
-    Html(shell(&q, &r, &h))
+    Html(shell(&stat, &q, &r, &h))
+}
+
+async fn status_fragment(State(st): State<AppState>) -> impl IntoResponse {
+    let hours = st.settings().await.radar_hours;
+    Html(render_status(&st, hours).await)
 }
 
 async fn queue(State(st): State<AppState>) -> impl IntoResponse {
@@ -450,7 +458,7 @@ async fn render_history(st: &AppState) -> String {
     )
 }
 
-fn shell(queue: &str, radar: &str, history: &str) -> String {
+fn shell(status: &str, queue: &str, radar: &str, history: &str) -> String {
     format!(
         r##"<!doctype html>
 <html lang="en" class="dark">
@@ -475,6 +483,7 @@ fn shell(queue: &str, radar: &str, history: &str) -> String {
         <a href="/settings" class="text-xs text-slate-400 hover:text-slate-200">settings</a>
       </div>
     </header>
+    {status}
     {queue}
     {radar}
     {history}
@@ -482,6 +491,7 @@ fn shell(queue: &str, radar: &str, history: &str) -> String {
 
   <script>
     function reloadAll() {{
+      htmx.ajax('GET', '/status', {{target:'#status', swap:'outerHTML'}});
       htmx.ajax('GET', '/queue', {{target:'#queue', swap:'outerHTML'}});
       const active = document.querySelector('#radar button.bg-slate-700');
       const hours = active ? new URL(active.getAttribute('hx-get'), location.origin).searchParams.get('hours') : '24';
@@ -493,12 +503,16 @@ fn shell(queue: &str, radar: &str, history: &str) -> String {
       navigator.clipboard.writeText(el.value);
     }}
     // Live updates: the server pings on every queue change; we refetch the lists.
+    // The countdown and per-source state move even when nothing fires, so the
+    // status panel refreshes on its own rather than only on a queue change.
+    setInterval(() => htmx.ajax('GET', '/status', {{target:'#status', swap:'outerHTML'}}), 10000);
     const es = new EventSource('/events');
     es.onmessage = () => reloadAll();
     es.onerror = () => {{ document.getElementById('live').style.opacity = 0.4; }};
   </script>
 </body>
 </html>"##,
+        status = status,
         queue = queue,
         radar = radar,
         history = history
@@ -1011,5 +1025,167 @@ fn resume_section(s: &Settings, derived: &[String]) -> String {
   </form>
 </section>"##,
         status = status
+    )
+}
+
+
+// ===================== status =====================
+
+/// The panel that answers "why is this empty".
+///
+/// An empty radar has several causes that look identical from the outside —
+/// first crawl still running, source switched off, board tokens 404ing, or
+/// everything scoring below the floor and being discarded. Reading container
+/// logs to tell them apart defeats the point of a dashboard, so the state is
+/// on the page.
+async fn render_status(st: &AppState, hours: i64) -> String {
+    let settings = st.settings().await;
+    let snap = st.status_snapshot().await;
+    let rows_in_window = db::recent_count(&st.pool, hours * 3600).await.unwrap_or(0);
+    let (level, message) = diagnosis(&snap, settings.score_floor, rows_in_window);
+
+    let (banner_class, icon) = match level {
+        Level::Ok => ("bg-emerald-500/10 ring-emerald-500/30 text-emerald-300", "&check;"),
+        Level::Info => ("bg-sky-500/10 ring-sky-500/30 text-sky-300", "&hellip;"),
+        Level::Warn => ("bg-amber-500/10 ring-amber-500/30 text-amber-300", "!"),
+        Level::Error => ("bg-rose-500/10 ring-rose-500/30 text-rose-300", "&times;"),
+    };
+
+    let sources = if snap.sources.is_empty() {
+        r##"<p class="text-xs text-slate-500">Starting up&hellip;</p>"##.to_string()
+    } else {
+        snap.sources
+            .iter()
+            .map(|(name, s)| {
+                let dot = if !s.enabled {
+                    "bg-slate-700"
+                } else if s.last_error.is_some() {
+                    "bg-rose-400"
+                } else if s.running {
+                    "bg-sky-400 animate-pulse"
+                } else {
+                    "bg-emerald-400"
+                };
+
+                let when = if !s.enabled {
+                    "off".to_string()
+                } else if s.running {
+                    "crawling now".to_string()
+                } else {
+                    match (s.last_run, s.next_run) {
+                        (Some(l), Some(n)) => format!("{} &middot; next {}", since(l), until(n)),
+                        (Some(l), None) => since(l),
+                        _ => "waiting for first crawl".to_string(),
+                    }
+                };
+
+                // Last cycle, in the terms that explain an empty board.
+                let counts = if s.last_run.is_none() {
+                    String::new()
+                } else {
+                    format!(
+                        r##"<span class="text-slate-500">{fetched} fetched &middot; {new} new &middot; {stored} kept{dropped}{notmatch}</span>"##,
+                        fetched = s.fetched,
+                        new = s.new_posts,
+                        stored = s.stored,
+                        dropped = if s.below_floor > 0 {
+                            format!(" &middot; {} below floor", s.below_floor)
+                        } else {
+                            String::new()
+                        },
+                        notmatch = if s.not_hiring > 0 {
+                            format!(" &middot; {} not hiring posts", s.not_hiring)
+                        } else {
+                            String::new()
+                        },
+                    )
+                };
+
+                let notes = if s.notes.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        r##"<ul class="mt-1 ml-4 space-y-0.5">{}</ul>"##,
+                        s.notes
+                            .iter()
+                            .map(|n| {
+                                format!(
+                                    r##"<li class="text-xs {}">{}</li>"##,
+                                    if n.ok { "text-slate-600" } else { "text-amber-400" },
+                                    esc(&n.text)
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("")
+                    )
+                };
+
+                let err = match &s.last_error {
+                    Some(e) => format!(
+                        r##"<p class="mt-1 ml-4 text-xs text-rose-400">{}</p>"##,
+                        esc(e)
+                    ),
+                    None => String::new(),
+                };
+
+                format!(
+                    r##"<li class="py-1.5 border-b border-slate-800/60 last:border-0">
+  <div class="flex items-center gap-2 text-sm">
+    <span class="w-1.5 h-1.5 rounded-full shrink-0 {dot}"></span>
+    <span class="text-slate-300 font-mono text-xs">{name}</span>
+    <span class="text-xs text-slate-500">{when}</span>
+  </div>
+  <div class="ml-4 text-xs">{counts}</div>
+  {notes}
+  {err}
+</li>"##,
+                    dot = dot,
+                    name = esc(name),
+                    when = when,
+                    counts = counts,
+                    notes = notes,
+                    err = err
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    // Set expectations explicitly. The first crawl deliberately does not alert,
+    // and someone watching a quiet board should know that is by design.
+    let expectation = if snap.sources.values().any(|s| s.bootstrapped) {
+        format!(
+            "Alerts fire only for postings that appear <em>after</em> the first crawl — \
+             history is on the radar but was never alerted, by design. \
+             Budget: {} alerts/hour, tiers at {:.0}/{:.0}/{:.0}.",
+            settings.per_hour_cap,
+            settings.score_floor,
+            settings.strong_min,
+            settings.exceptional_min
+        )
+    } else {
+        "The first crawl of each source records what is already posted without \
+         alerting, so you are not blasted with history. Anything posted after \
+         that can fire."
+            .to_string()
+    };
+
+    format!(
+        r##"<section id="status" class="mb-6">
+  <div class="flex items-center justify-between mb-2">
+    <h2 class="text-sm uppercase tracking-wide text-slate-400">Status</h2>
+    <a href="/settings" class="text-xs text-slate-500 hover:text-slate-300">tune &rarr;</a>
+  </div>
+  <div class="rounded-md ring-1 px-3 py-2 text-sm {banner_class}">
+    <span class="font-mono mr-1">{icon}</span>{message}
+  </div>
+  <ul class="mt-2">{sources}</ul>
+  <p class="mt-2 text-xs text-slate-600">{expectation}</p>
+</section>"##,
+        banner_class = banner_class,
+        icon = icon,
+        message = esc(&message),
+        sources = sources,
+        expectation = expectation
     )
 }

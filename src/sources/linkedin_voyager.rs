@@ -1,4 +1,4 @@
-use super::JobSource;
+use super::{brief, Fetched, JobSource};
 use crate::config::Voyager as VoyagerCfg;
 use crate::model::{ApplyChannel, RawPost};
 use crate::settings::Settings;
@@ -37,14 +37,22 @@ impl Voyager {
 
 #[async_trait::async_trait]
 impl JobSource for Voyager {
+    fn is_enabled(&self, cfg: &Settings) -> bool {
+        cfg.voyager_enabled
+    }
+
     fn name(&self) -> &str {
         "linkedin_voyager"
     }
 
-    async fn fetch(&self, live: &Settings) -> anyhow::Result<Vec<RawPost>> {
+    async fn fetch(&self, live: &Settings) -> anyhow::Result<Fetched> {
+        let mut out = Fetched::default();
         if !self.ready(live) {
+            if live.voyager_enabled {
+                out.fail("enabled, but LI_AT / query_id are not set in config");
+            }
             tracing::debug!("voyager source not configured; skipping");
-            return Ok(vec![]);
+            return Ok(out);
         }
         let li_at = self.cfg.li_at.as_deref().unwrap_or_default();
         let jsession = self.cfg.jsessionid.as_deref().unwrap_or("ajax:0000000000000000000");
@@ -83,17 +91,24 @@ impl JobSource for Voyager {
             Ok(r) => {
                 tracing::warn!(status = %r.status(),
                     "voyager non-200 (cookie expired or queryId stale?)");
-                return Ok(vec![]);
+                out.fail(format!(
+                    "HTTP {} — cookie expired or queryId stale",
+                    r.status().as_u16()
+                ));
+                return Ok(out);
             }
             Err(e) => {
                 tracing::warn!(%e, "voyager fetch failed");
-                return Ok(vec![]);
+                out.fail(format!("unreachable — {}", brief(&e)));
+                return Ok(out);
             }
         };
 
         walk(&body, &mut posts);
         tracing::info!(found = posts.len(), "voyager content search");
-        Ok(posts)
+        out.ok(format!("{} posts extracted", posts.len()));
+        out.posts = posts;
+        Ok(out)
     }
 }
 

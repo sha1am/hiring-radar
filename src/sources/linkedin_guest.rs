@@ -1,4 +1,4 @@
-use super::JobSource;
+use super::{brief, Fetched, JobSource};
 use crate::model::{ApplyChannel, RawPost};
 use crate::settings::Settings;
 use crate::timeparse;
@@ -19,14 +19,22 @@ impl LinkedInGuest {
 
 #[async_trait::async_trait]
 impl JobSource for LinkedInGuest {
+    fn is_enabled(&self, cfg: &Settings) -> bool {
+        cfg.linkedin_guest_enabled
+    }
+
     fn name(&self) -> &str {
         "linkedin_guest"
     }
 
-    async fn fetch(&self, cfg: &Settings) -> anyhow::Result<Vec<RawPost>> {
-        let mut posts = Vec::new();
+    async fn fetch(&self, cfg: &Settings) -> anyhow::Result<Fetched> {
+        let mut out = Fetched::default();
         if !cfg.linkedin_guest_enabled {
-            return Ok(posts);
+            return Ok(out);
+        }
+        if cfg.linkedin_queries.is_empty() {
+            out.info("no queries configured");
+            return Ok(out);
         }
         for q in &cfg.linkedin_queries {
             let url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search";
@@ -46,16 +54,25 @@ impl JobSource for LinkedInGuest {
                 Ok(r) => {
                     // 429 here means slow down: widen your poll interval / jitter.
                     tracing::warn!(status = %r.status(), kw = q.keywords, "linkedin guest non-200");
+                    out.fail(format!(
+                        "{}: HTTP {}{}",
+                        q.keywords,
+                        r.status().as_u16(),
+                        if r.status().as_u16() == 429 { " — rate limited, widen the poll interval" } else { "" }
+                    ));
                     continue;
                 }
                 Err(e) => {
                     tracing::warn!(%e, kw = q.keywords, "linkedin guest fetch failed");
+                    out.fail(format!("{}: unreachable — {}", q.keywords, brief(&e)));
                     continue;
                 }
             };
-            posts.extend(parse_cards(&html));
+            let cards = parse_cards(&html);
+            out.ok(format!("{}: {} cards", q.keywords, cards.len()));
+            out.posts.extend(cards);
         }
-        Ok(posts)
+        Ok(out)
     }
 }
 

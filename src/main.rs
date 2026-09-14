@@ -11,6 +11,7 @@ mod score;
 mod sources;
 mod settings;
 mod state;
+mod status;
 mod timeparse;
 mod web;
 
@@ -91,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
         events,
         settings: Arc::new(tokio::sync::RwLock::new(Arc::new(live))),
         matcher: Arc::new(tokio::sync::RwLock::new(Arc::new(matcher))),
+        status: Arc::new(tokio::sync::RwLock::new(status::Status::new())),
     };
 
     // ---- assemble sources ----
@@ -195,11 +197,30 @@ async fn crawl_loop(state: AppState, source: Box<dyn JobSource>, interval: u64, 
     let name = source.name().to_string();
     loop {
         let live = state.settings().await;
+        let enabled = source.is_enabled(&live);
+        state
+            .with_status(&name, |s| {
+                s.enabled = enabled;
+                s.begin_cycle();
+            })
+            .await;
+
         match source.fetch(&live).await {
-            Ok(posts) if posts.is_empty() => {
+            Ok(fetched) if fetched.posts.is_empty() => {
+                let notes = fetched.notes.clone();
                 tracing::debug!(source = %name, "nothing returned (source disabled or empty)");
+                state.with_status(&name, |s| s.notes = notes).await;
             }
-            Ok(posts) => {
+            Ok(fetched) => {
+                let notes = fetched.notes.clone();
+                let posts = fetched.posts;
+                state
+                    .with_status(&name, |s| {
+                        s.notes = notes;
+                        s.fetched = posts.len();
+                        s.total_fetched += posts.len() as u64;
+                    })
+                    .await;
                 // First non-empty cycle for this source is a backfill: record, don't notify.
                 let bootstrapping = db::seen_count(&state.pool, &name).await.unwrap_or(0) == 0;
                 let mut new_count = 0;
@@ -214,14 +235,26 @@ async fn crawl_loop(state: AppState, source: Box<dyn JobSource>, interval: u64, 
                     }
                     // On the first crawl we still ingest — the radar needs history
                     // to show — but as 'backfilled', which can never fire.
-                    if let Err(e) = pipeline::ingest(&state, post, bootstrapping).await {
-                        tracing::warn!(source = %name, %e, "ingest failed");
-                    } else if bootstrapping {
-                        backfilled += 1;
-                    } else {
-                        new_count += 1;
+                    match pipeline::ingest(&state, post, bootstrapping).await {
+                        Err(e) => tracing::warn!(source = %name, %e, "ingest failed"),
+                        Ok(outcome) => {
+                            state.with_status(&name, |s| s.note_outcome(&outcome)).await;
+                            if bootstrapping {
+                                backfilled += 1;
+                            } else {
+                                new_count += 1;
+                            }
+                        }
                     }
                 }
+                state
+                    .with_status(&name, |s| {
+                        s.new_posts = if bootstrapping { backfilled } else { new_count };
+                        if bootstrapping {
+                            s.bootstrapped = true;
+                        }
+                    })
+                    .await;
                 if bootstrapping {
                     tracing::info!(source = %name, backfilled,
                         "bootstrapped (history on the radar, nothing notified)");
@@ -234,7 +267,11 @@ async fn crawl_loop(state: AppState, source: Box<dyn JobSource>, interval: u64, 
                     }
                 }
             }
-            Err(e) => tracing::warn!(source = %name, %e, "fetch failed"),
+            Err(e) => {
+                tracing::warn!(source = %name, %e, "fetch failed");
+                let msg = e.to_string();
+                state.with_status(&name, |s| s.last_error = Some(msg)).await;
+            }
         }
 
         let extra = if jitter > 0 {
@@ -242,7 +279,10 @@ async fn crawl_loop(state: AppState, source: Box<dyn JobSource>, interval: u64, 
         } else {
             0
         };
-        tokio::time::sleep(Duration::from_secs(interval + extra)).await;
+        let wait = interval + extra;
+        state.with_status(&name, |s| s.end_cycle(wait)).await;
+        state.notify_ui();
+        tokio::time::sleep(Duration::from_secs(wait)).await;
     }
 }
 

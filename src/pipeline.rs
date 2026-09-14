@@ -1,5 +1,6 @@
 use crate::model::{now, RawPost, Tier};
 use crate::resume::tokenize;
+use crate::status::Outcome;
 use crate::score::{priority, LexicalScorer, Scorer};
 use crate::state::AppState;
 use crate::{classify, db};
@@ -11,10 +12,14 @@ use crate::{classify, db};
 /// so the radar has history to show, but lands in 'backfilled' status, which
 /// `db::eligible` excludes — so it can never fire a notification. Without this
 /// the dashboard is empty until something new is posted.
-pub async fn ingest(state: &AppState, post: RawPost, backfill: bool) -> anyhow::Result<()> {
+pub async fn ingest(
+    state: &AppState,
+    post: RawPost,
+    backfill: bool,
+) -> anyhow::Result<Outcome> {
     // 1. Is this actually a hiring post?
     if !classify::is_hiring(&post) {
-        return Ok(());
+        return Ok(Outcome::NotHiring);
     }
 
     // Snapshot the settings once: a save mid-ingest must not score a post
@@ -32,7 +37,7 @@ pub async fn ingest(state: &AppState, post: RawPost, backfill: bool) -> anyhow::
 
     // 3. Tier — below the floor is dropped entirely (never stored).
     let Some(tier) = Tier::from_score(score, &live) else {
-        return Ok(());
+        return Ok(Outcome::BelowFloor { score });
     };
 
     let detected = now();
@@ -84,5 +89,5 @@ pub async fn ingest(state: &AppState, post: RawPost, backfill: bool) -> anyhow::
         tracing::info!(tier = tier.as_str(), score, company = %post.company,
             "scored: {}", post.title);
     }
-    Ok(())
+    Ok(Outcome::Stored { score })
 }

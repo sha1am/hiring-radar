@@ -1,4 +1,4 @@
-use super::JobSource;
+use super::{brief, Fetched, JobSource};
 use crate::model::{ApplyChannel, RawPost};
 use crate::settings::Settings;
 use crate::timeparse;
@@ -75,14 +75,22 @@ fn strip_html(s: &str) -> String {
 
 #[async_trait::async_trait]
 impl JobSource for Greenhouse {
+    fn is_enabled(&self, cfg: &Settings) -> bool {
+        cfg.greenhouse_enabled
+    }
+
     fn name(&self) -> &str {
         "greenhouse"
     }
 
-    async fn fetch(&self, cfg: &Settings) -> anyhow::Result<Vec<RawPost>> {
-        let mut posts = Vec::new();
+    async fn fetch(&self, cfg: &Settings) -> anyhow::Result<Fetched> {
+        let mut out = Fetched::default();
         if !cfg.greenhouse_enabled {
-            return Ok(posts);
+            return Ok(out);
+        }
+        if cfg.greenhouse_boards.is_empty() {
+            out.info("no board tokens configured");
+            return Ok(out);
         }
         for board in &cfg.greenhouse_boards {
             let url = format!("{}/{board}/jobs?content=true", self.base.trim_end_matches('/'));
@@ -90,25 +98,34 @@ impl JobSource for Greenhouse {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(board, %e, "greenhouse fetch failed");
+                    out.fail(format!("{board}: unreachable — {}", brief(&e)));
                     continue;
                 }
             };
-            if !resp.status().is_success() {
-                tracing::warn!(board, status = %resp.status(), "greenhouse non-200");
+            let status = resp.status();
+            if !status.is_success() {
+                tracing::warn!(board, %status, "greenhouse non-200");
+                out.fail(if status.as_u16() == 404 {
+                    format!("{board}: HTTP 404 — no such board token")
+                } else {
+                    format!("{board}: HTTP {}", status.as_u16())
+                });
                 continue;
             }
             let data: Resp = match resp.json().await {
                 Ok(d) => d,
                 Err(e) => {
                     tracing::warn!(board, %e, "greenhouse json parse failed");
+                    out.fail(format!("{board}: unreadable response — {}", brief(&e)));
                     continue;
                 }
             };
+            out.ok(format!("{board}: {} jobs", data.jobs.len()));
             let company = pretty(board);
             for j in data.jobs {
                 let posted_at = timeparse::parse_opt(j.first_published.as_deref())
                     .or_else(|| timeparse::parse_opt(j.updated_at.as_deref()));
-                posts.push(RawPost {
+                out.posts.push(RawPost {
                     source: "greenhouse".into(),
                     external_id: format!("{board}:{}", j.id),
                     url: j.absolute_url.clone(),
@@ -121,7 +138,7 @@ impl JobSource for Greenhouse {
                 });
             }
         }
-        Ok(posts)
+        Ok(out)
     }
 }
 

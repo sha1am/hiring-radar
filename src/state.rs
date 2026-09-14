@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::draft::Drafter;
 use crate::resume::Matcher;
 use crate::settings::Settings;
+use crate::status::Status;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -21,6 +22,8 @@ pub struct AppState {
     /// IDF corpus + the vectorised resume. Rebuilt when the resume changes;
     /// the corpus is updated as posts stream in.
     pub matcher: Arc<RwLock<Arc<Matcher>>>,
+    /// What each source is doing, so an empty board can explain itself.
+    pub status: Arc<RwLock<Status>>,
 }
 
 impl AppState {
@@ -33,6 +36,20 @@ impl AppState {
 
     pub async fn set_settings(&self, s: Settings) {
         *self.settings.write().await = Arc::new(s);
+    }
+
+    /// Mutate one source's status under a brief write lock.
+    pub async fn with_status<F: FnOnce(&mut crate::status::SourceStatus)>(
+        &self,
+        source: &str,
+        f: F,
+    ) {
+        let mut g = self.status.write().await;
+        f(g.entry(source));
+    }
+
+    pub async fn status_snapshot(&self) -> Status {
+        self.status.read().await.clone()
     }
 
     pub async fn matcher(&self) -> Arc<Matcher> {
