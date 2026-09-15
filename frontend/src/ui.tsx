@@ -6,22 +6,104 @@
 /// important. Three text sizes, three weights, one accent per meaning.
 
 import type { ReactNode } from 'react'
+import type { Dimension } from './types'
 
-/// Tier colour.
+/// Rank colour.
 ///
-/// Amber for the best match rather than rose: rose reads as an error, and this
-/// is the opposite of an error. Sky for strong, slate for marginal. That leaves
-/// rose free to mean only one thing anywhere in the app — something is wrong.
+/// Amber for the best rather than rose: rose reads as an error, and this is the
+/// opposite of an error. That leaves rose meaning exactly one thing anywhere in
+/// the app — something is wrong.
 export const TIER_ACCENT: Record<string, string> = {
+  // verdicts, which are the better signal when the ATS has an opinion
+  apply: 'bg-amber-400',
+  stretch: 'bg-sky-400',
+  reach: 'bg-slate-700',
+  skip: 'bg-slate-800',
+  // tiers, for rows scored before a resume existed
   exceptional: 'bg-amber-400',
   strong: 'bg-sky-400',
   marginal: 'bg-slate-700',
 }
 
+/// Which of the two rankings to colour by.
+///
+/// There are two: the tier, which is a threshold on the score and drives the
+/// notification budget, and the verdict, which is the ATS's advice. They can
+/// disagree — a posting can score 91 and still be a stretch because you are two
+/// years short — and showing an amber bar next to a blue "STRETCH" badge just
+/// looks broken. The verdict is the better signal, so it wins where it exists.
+export const rankOf = (c: { verdict: string | null; tier: string }): string =>
+  c.verdict ?? c.tier
+
 export const TIER_TEXT: Record<string, string> = {
+  apply: 'text-amber-300',
+  stretch: 'text-sky-300',
+  reach: 'text-slate-500',
+  skip: 'text-slate-600',
   exceptional: 'text-amber-300',
   strong: 'text-sky-300',
   marginal: 'text-slate-500',
+}
+
+/// The verdict: the assessment's own advice, as a word rather than a number.
+///
+/// A score of 66 tells you nothing on its own — 66 out of what, against whom.
+/// "Stretch" is the sentence the number was standing in for, and it is what you
+/// act on. Colours follow the tier palette so a board reads consistently: amber
+/// is the standout, sky is solid, slate is neither.
+export const VERDICT_STYLE: Record<string, string> = {
+  apply: 'bg-amber-400/15 text-amber-300 ring-amber-400/30',
+  stretch: 'bg-sky-400/15 text-sky-300 ring-sky-400/30',
+  reach: 'bg-slate-700/40 text-slate-400 ring-slate-600/40',
+  skip: 'bg-slate-800/40 text-slate-600 ring-slate-700/40',
+}
+
+export function VerdictBadge({ verdict, title }: { verdict: string; title?: string }) {
+  return (
+    <span
+      title={title}
+      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ring-1 ${
+        VERDICT_STYLE[verdict] ?? VERDICT_STYLE.reach
+      }`}
+    >
+      {verdict}
+    </span>
+  )
+}
+
+/// The score, shown as its parts.
+///
+/// A number asks to be trusted. This shows the working: five dimensions, how
+/// each one scored, and what each concluded in words. It is the difference
+/// between "66" and "66, because the stack matches and you are two years
+/// short" — and the second one you can argue with, which is the point.
+export function Breakdown({ dimensions }: { dimensions: Dimension[] }) {
+  if (dimensions.length === 0) return null
+  return (
+    <dl className="space-y-1.5">
+      {dimensions.map((d) => (
+        <div key={d.name} className="grid grid-cols-[4.5rem_3rem_1fr] items-center gap-2">
+          <dt className="text-[10px] uppercase tracking-[0.08em] text-slate-600">{d.name}</dt>
+          <dd aria-hidden className="h-1 overflow-hidden rounded-full bg-slate-800">
+            {/* Weight is width, fit is fill: a dimension worth 35 points reads
+                as wider than one worth 10, so the picture matches the maths. */}
+            <div
+              className={`h-full rounded-full ${
+                d.fit >= 0.8 ? 'bg-emerald-400/70' : d.fit >= 0.5 ? 'bg-sky-400/70' : 'bg-slate-600'
+              }`}
+              style={{ width: `${Math.round(d.fit * 100)}%` }}
+            />
+          </dd>
+          <dd className="truncate text-[11px] text-slate-500" title={d.note}>
+            {d.note}
+            <span className="ml-1.5 font-mono text-slate-700">
+              {(d.fit * d.weight).toFixed(0)}/{d.weight.toFixed(0)}
+            </span>
+          </dd>
+        </div>
+      ))}
+    </dl>
+  )
 }
 
 /// A section heading. One style, everywhere.

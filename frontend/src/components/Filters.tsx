@@ -22,6 +22,14 @@ const WINDOWS: [number, string, string][] = [
 ]
 
 /// The stored keys are terse; these are what a person reads.
+/// The verdict keys are terse; these say what they mean.
+const VERDICT_LABEL: Record<string, string> = {
+  apply: 'Apply',
+  stretch: 'Stretch',
+  reach: 'Reach',
+  skip: 'Skip',
+}
+
 const REGION_LABEL: Record<string, string> = {
   india: 'India',
   gulf: 'Gulf',
@@ -46,6 +54,7 @@ export function activeCount(f: F): number {
     (f.min ? 1 : 0) +
     (f.yrsHave ? 1 : 0) +
     f.regions.length +
+    f.verdicts.length +
     f.roles.length +
     f.levels.length +
     f.modes.length +
@@ -119,6 +128,7 @@ export function FilterBar({
   sources,
   statuses,
   regions,
+  verdicts,
   roles,
   levels,
   workModes,
@@ -131,6 +141,7 @@ export function FilterBar({
   sources: Facet[]
   statuses: Facet[]
   regions: Facet[]
+  verdicts: Facet[]
   roles: Facet[]
   levels: Facet[]
   workModes: Facet[]
@@ -188,8 +199,18 @@ export function FilterBar({
 
       {open && (
         <div className="space-y-2.5 rounded-lg bg-slate-900/40 p-3 ring-1 ring-slate-800/80">
-          {/* Region first: the coarsest cut, and the one you make before you
-              care what the role is. */}
+          {/* The verdict first: it is the assessment's own summary, and the
+              one cut that answers "what should I do today" rather than "what
+              is out there". */}
+          <ChipRow
+            label="verdict"
+            facets={verdicts}
+            selected={filters.verdicts}
+            onChange={(verdicts) => set({ verdicts })}
+            labelFor={VERDICT_LABEL}
+          />
+          {/* Region next: the coarsest cut of what is out there, and the one
+              you make before you care what the role is. */}
           <ChipRow
             label="where"
             facets={regions}

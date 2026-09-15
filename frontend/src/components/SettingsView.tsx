@@ -200,6 +200,34 @@ function ResumeBlock({ s, reload }: { s: Settings; reload: () => void }) {
         )}
       </div>
 
+      {/* The ATS scores against what was *read*, not against the PDF. If it
+          read you as a frontend engineer with two years then every score on
+          the board is wrong, and without showing this you'd have no way to
+          find that out. */}
+      {s.has_resume && (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-md bg-slate-950/40 p-3 text-xs sm:grid-cols-4">
+          {[
+            ['experience', s.profile.years ? `${s.profile.years} years` : 'not set'],
+            ['reads as', s.profile.level ?? 'unclear'],
+            ['discipline', s.profile.roles.join(', ') || 'unclear'],
+            ['stack', `${s.profile.stack.length} technologies`],
+          ].map(([k, v]) => (
+            <div key={k}>
+              <dt className="text-[10px] uppercase tracking-[0.08em] text-slate-600">{k}</dt>
+              <dd className="text-slate-300">{v}</dd>
+            </div>
+          ))}
+          {s.profile.stack.length > 0 && (
+            <div className="col-span-2 sm:col-span-4">
+              <dt className="sr-only">detected stack</dt>
+              <dd className="font-mono text-[11px] leading-relaxed text-slate-600">
+                {s.profile.stack.join(', ')}
+              </dd>
+            </div>
+          )}
+        </dl>
+      )}
+
       <p className="text-sm text-slate-400">
         {s.has_resume
           ? `Loaded${s.resume_filename ? ` from ${s.resume_filename}` : ''} — ${s.resume_chars.toLocaleString()} characters. Similarity scoring is on.`
@@ -325,6 +353,22 @@ export function SettingsPanel() {
           rows={3}
           onChange={(v) => set('seniority', v)}
         />
+        <Field
+          label="Your experience, in years"
+          hint="The single biggest lever on the score. Typed rather than guessed from your resume, because you know it exactly — and a posting asking for four more years than you have is a reach however well the stack matches."
+        >
+          <input
+            type="number"
+            min={0}
+            max={50}
+            value={s.years_experience ?? ''}
+            onChange={(e) =>
+              set('years_experience', e.target.value === '' ? null : Number(e.target.value))
+            }
+            className={`${input} font-mono`}
+          />
+        </Field>
+
         <ListField
           label="Languages you write"
           hint="One per line: go, python, rust. This is a gate, not a bonus — see below."

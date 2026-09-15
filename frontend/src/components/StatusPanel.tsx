@@ -1,4 +1,7 @@
-import type { Level, Source, Status } from '../types'
+import { useEffect, useState } from 'react'
+import type { Level, LogEntry, Source, Status } from '../types'
+import { clearLogs, getLogs } from '../api'
+import { Button } from '../ui'
 import { Heading } from '../ui'
 
 /// The panel that answers "why is this empty".
@@ -111,6 +114,89 @@ function SourceCard({ s }: { s: Source }) {
   )
 }
 
+/// Recent warnings and errors, with a button that copies the lot.
+///
+/// The same lines are in `docker compose logs`, which is the wrong place to
+/// send someone: the handful that matter are scattered through thousands that
+/// don't, and they scroll away. One click here produces a report that is
+/// exactly the interesting part.
+function Logs() {
+  const [logs, setLogs] = useState<{ entries: LogEntry[]; text: string } | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const load = () => {
+    getLogs().then(setLogs).catch(() => setLogs(null))
+  }
+  useEffect(load, [])
+
+  const copy = async () => {
+    if (!logs) return
+    try {
+      await navigator.clipboard.writeText(logs.text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard access is denied over plain HTTP on some browsers, and the
+      // dashboard is served over HTTP by design. Fall back to selecting it so
+      // there is always a way to get the text out.
+      const el = document.getElementById('log-text') as HTMLTextAreaElement | null
+      el?.select()
+    }
+  }
+
+  if (!logs) return null
+
+  return (
+    <div className="space-y-3">
+      <Heading
+        right={
+          <span className="flex items-center gap-1">
+            {copied && <span className="text-xs text-emerald-400">copied</span>}
+            <Button onClick={copy}>Copy all</Button>
+            <Button onClick={() => clearLogs().then(load)} tone="danger">
+              Clear
+            </Button>
+          </span>
+        }
+      >
+        Warnings &amp; errors
+        <span className="ml-2 normal-case tracking-normal text-slate-600">
+          {logs.entries.length} since start-up
+        </span>
+      </Heading>
+
+      {logs.entries.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-slate-800 px-4 py-6 text-center text-xs text-slate-600">
+          Nothing has gone wrong since start-up.
+        </p>
+      ) : (
+        <ul className="max-h-96 space-y-px overflow-y-auto rounded-lg bg-slate-950/60 p-2 ring-1 ring-slate-800/80">
+          {logs.entries.map((e, i) => (
+            <li key={i} className="flex gap-2 px-1 py-1 font-mono text-[11px] leading-relaxed">
+              <span
+                className={`shrink-0 ${e.level === 'ERROR' ? 'text-rose-400' : 'text-amber-400/80'}`}
+              >
+                {e.level}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="text-slate-300">{e.message}</span>
+                {e.fields && <span className="ml-2 text-slate-600">{e.fields}</span>}
+                <span className="ml-2 text-slate-700">
+                  {e.target.replace('hiring_radar::', '')}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Off-screen, but selectable — the clipboard API is blocked over plain
+          HTTP in some browsers and this dashboard is HTTP by design. */}
+      <textarea id="log-text" readOnly value={logs.text} className="sr-only" />
+    </div>
+  )
+}
+
 export function StatusPanel({ status }: { status: Status }) {
   return (
     <section className="space-y-4">
@@ -139,6 +225,8 @@ export function StatusPanel({ status }: { status: Status }) {
           </div>
         )}
       </div>
+
+      <Logs />
     </section>
   )
 }

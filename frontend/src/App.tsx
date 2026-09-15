@@ -152,6 +152,7 @@ function RadarView({
         sources={radar.sources}
         statuses={radar.statuses}
         regions={radar.regions}
+        verdicts={radar.verdicts}
         roles={radar.roles}
         levels={radar.levels}
         workModes={radar.work_modes}
@@ -185,6 +186,48 @@ function RadarView({
             <RadarRow key={c.id} card={c} />
           ))}
         </ul>
+      )}
+
+      {/* The one output an ATS never gives a candidate. Every assessment
+          records what a posting wanted that you don't have; across a few
+          hundred of them that stops being "you were rejected" and becomes
+          "this is the thing that keeps rejecting you". */}
+      {radar.gaps.length > 0 && (
+        <div className="rounded-lg bg-slate-900/30 p-3 ring-1 ring-slate-800/60">
+          <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">
+            What this board keeps asking for
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {radar.gaps.map((g) => {
+              const on = filters.tags.includes(g.value)
+              return (
+                <button
+                  key={g.value}
+                  onClick={() =>
+                    setFilters({
+                      ...filters,
+                      // Clicking a gap shows the postings that want it — the
+                      // natural next question after "what am I missing".
+                      tags: on ? filters.tags.filter((t) => t !== g.value) : [...filters.tags, g.value],
+                    })
+                  }
+                  aria-pressed={on}
+                  className={`rounded-full px-2 py-0.5 text-xs transition-colors ${
+                    on
+                      ? 'bg-slate-200 text-slate-900'
+                      : 'bg-slate-800/70 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  {g.label}
+                  <span className={`ml-1 ${on ? 'text-slate-500' : 'text-slate-600'}`}>{g.count}</span>
+                </button>
+              )
+            })}
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-600">
+            Counted across postings you haven’t acted on yet. Click one to see who wants it.
+          </p>
+        </div>
       )}
 
       {/* The facts sharpen as the model works through the backlog, so a board

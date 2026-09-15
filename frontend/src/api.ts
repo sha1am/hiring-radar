@@ -1,4 +1,4 @@
-import type { Bootstrap, Filters, OutboxPage, RadarPage, Settings, Status } from './types'
+import type { Bootstrap, Filters, LogEntry, OutboxPage, RadarPage, Settings, Status } from './types'
 
 /// Every call goes through here so failures have one shape.
 ///
@@ -38,6 +38,7 @@ export function toQuery(f: Filters): string {
   if (f.levels.length) p.set('levels', f.levels.join(','))
   if (f.modes.length) p.set('modes', f.modes.join(','))
   if (f.regions.length) p.set('regions', f.regions.join(','))
+  if (f.verdicts.length) p.set('verdicts', f.verdicts.join(','))
   if (f.yrsHave) p.set('yrs_have', f.yrsHave)
   if (f.sort !== 'newest') p.set('sort', f.sort)
   return p.toString()
@@ -48,6 +49,13 @@ export const getRadar = (f: Filters) => req<RadarPage>(`/api/radar?${toQuery(f)}
 export const getStatus = () => req<Status>('/api/status')
 export const getOutbox = () => req<OutboxPage>('/api/outbox')
 export const getSettings = () => req<Settings>('/api/settings')
+
+/// Recent warnings and errors. `text` is rendered server-side so what lands in
+/// a bug report is formatted the same every time.
+export const getLogs = () =>
+  req<{ entries: LogEntry[]; text: string }>('/api/logs')
+
+export const clearLogs = () => req<{ cleared: boolean }>('/api/logs', { method: 'DELETE' })
 
 /// The server clamps on save and returns what it stored, so the caller must use
 /// the response rather than the object it sent — otherwise the form shows a

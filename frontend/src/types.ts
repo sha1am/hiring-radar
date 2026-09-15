@@ -4,6 +4,25 @@
 
 export type Level = 'ok' | 'info' | 'warn' | 'error'
 
+export type Verdict = 'apply' | 'stretch' | 'reach' | 'skip'
+
+export interface LogEntry {
+  at: number
+  level: string
+  target: string
+  message: string
+  fields: string
+}
+
+/** One dimension of the assessment, so the score can show its working. */
+export interface Dimension {
+  name: string
+  /** 0–1 before weighting. */
+  fit: number
+  weight: number
+  note: string
+}
+
 export interface Card {
   id: number
   title: string
@@ -36,6 +55,15 @@ export interface Card {
   employment: string | null
   /** india | gulf | sea | apac | europe | americas | other; null = unresolved. */
   region: string | null
+
+  // the ATS assessment (see src/ats.rs)
+  /** apply | stretch | reach | skip — advice, not just a number. */
+  verdict: Verdict | null
+  /** One sentence naming the dimension that decided the score. */
+  reason: string | null
+  /** What the posting wanted that you don't have. */
+  missing: string[]
+  dimensions: Dimension[]
   /** False while the model still has this row queued. */
   enriched: boolean
 }
@@ -58,6 +86,9 @@ export interface RadarPage {
   levels: Facet[]
   work_modes: Facet[]
   regions: Facet[]
+  verdicts: Facet[]
+  /** What this board keeps asking for that you don't have. */
+  gaps: Facet[]
   pending_enrichment: number
   /** What the server actually sorted by — render the control from this. */
   sort: SortKey
@@ -175,6 +206,14 @@ export interface Settings {
   company_lists: CompanyList[]
   has_resume: boolean
   resume_chars: number
+  years_experience: number | null
+  /** What the resume was actually read as — the thing the ATS scores against. */
+  profile: {
+    years: number | null
+    level: string | null
+    roles: string[]
+    stack: string[]
+  }
 }
 
 /** What the radar list is filtered by. Mirrored into the URL hash. */
@@ -190,6 +229,7 @@ export interface Filters {
   levels: string[]
   modes: string[]
   regions: string[]
+  verdicts: string[]
   /** "I have N years" — show anything asking for at most N. */
   yrsHave: string
   sort: SortKey
@@ -207,6 +247,7 @@ export const emptyFilters = (hours: number): Filters => ({
   levels: [],
   modes: [],
   regions: [],
+  verdicts: [],
   yrsHave: '',
   // A feed by default: "what just landed" is the question you open this with.
   sort: 'newest',

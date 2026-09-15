@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Card as CardT } from '../types'
 import { dismissCandidate, markApplied, saveDraft, sendCandidate } from '../api'
-import { Button, Dotted, Score, TIER_ACCENT, inputClass } from '../ui'
+import { Breakdown, Button, Dotted, Score, TIER_ACCENT, VerdictBadge, inputClass, rankOf } from '../ui'
 
 /// What a posting *is*, as a phrase rather than a row of chips.
 ///
@@ -46,7 +46,7 @@ export function RadarRow({ card }: { card: CardT }) {
       >
         <span
           aria-hidden
-          className={`w-0.5 shrink-0 rounded-full ${TIER_ACCENT[card.tier] ?? TIER_ACCENT.marginal}`}
+          className={`w-0.5 shrink-0 rounded-full ${TIER_ACCENT[rankOf(card)] ?? TIER_ACCENT.marginal}`}
         />
 
         <span className="min-w-0 flex-1">
@@ -68,8 +68,11 @@ export function RadarRow({ card }: { card: CardT }) {
           />
         </span>
 
-        <span className="flex shrink-0 flex-col items-end justify-center gap-0.5 pl-2">
-          <Score value={card.score} tier={card.tier} title={`${card.tier} match`} />
+        <span className="flex shrink-0 flex-col items-end justify-center gap-1 pl-2">
+          <span className="flex items-center gap-1.5">
+            {card.verdict && <VerdictBadge verdict={card.verdict} title={card.reason ?? undefined} />}
+            <Score value={card.score} tier={rankOf(card)} title={card.reason ?? `${card.tier} match`} />
+          </span>
           <span className="whitespace-nowrap text-[11px] text-slate-600">{card.age}</span>
         </span>
       </a>
@@ -89,6 +92,7 @@ export function Card({ card, onChanged }: { card: CardT; onChanged: () => void }
   const [subject, setSubject] = useState(card.draft_subject ?? '')
   const [body, setBody] = useState(card.draft_body ?? '')
   const [open, setOpen] = useState(false)
+  const [why, setWhy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null)
 
@@ -127,7 +131,7 @@ export function Card({ card, onChanged }: { card: CardT; onChanged: () => void }
       <div className="flex items-stretch">
         <span
           aria-hidden
-          className={`w-0.5 shrink-0 ${TIER_ACCENT[card.tier] ?? TIER_ACCENT.marginal}`}
+          className={`w-0.5 shrink-0 ${TIER_ACCENT[rankOf(card)] ?? TIER_ACCENT.marginal}`}
         />
         <div className="min-w-0 flex-1 p-3">
           <a
@@ -145,15 +149,23 @@ export function Card({ card, onChanged }: { card: CardT; onChanged: () => void }
           {stack(card, 8) && (
             <p className="mt-1 truncate font-mono text-[11px] text-slate-600">{stack(card, 8)}</p>
           )}
-          {card.why && (
-            <p className="mt-1.5 text-xs text-slate-500">
-              Resume match on <span className="text-slate-400">{card.why}</span>
-            </p>
+          {/* The assessment's own sentence. It replaces the old "matched on
+              go, kafka, systems", which read as evidence but was true of every
+              posting you would ever look at. */}
+          {card.reason ? (
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{card.reason}</p>
+          ) : (
+            card.why && (
+              <p className="mt-1.5 text-xs text-slate-500">
+                Resume match on <span className="text-slate-400">{card.why}</span>
+              </p>
+            )
           )}
         </div>
 
-        <div className="shrink-0 p-3 pl-2">
-          <Score value={card.score} tier={card.tier} title={`${card.tier} match`} />
+        <div className="flex shrink-0 flex-col items-end gap-1.5 p-3 pl-2">
+          <Score value={card.score} tier={rankOf(card)} title={card.reason ?? `${card.tier} match`} />
+          {card.verdict && <VerdictBadge verdict={card.verdict} />}
         </div>
       </div>
 
@@ -164,6 +176,12 @@ export function Card({ card, onChanged }: { card: CardT; onChanged: () => void }
         <Button onClick={() => setOpen(!open)} tone={open ? 'normal' : 'quiet'}>
           {open ? 'Hide draft' : byEmail ? 'Write email' : 'Draft message'}
         </Button>
+
+        {card.dimensions.length > 0 && (
+          <Button onClick={() => setWhy(!why)} tone={why ? 'normal' : 'quiet'}>
+            {why ? 'Hide scoring' : 'Why this score'}
+          </Button>
+        )}
 
         {!byEmail && card.apply_target && (
           <a
@@ -194,6 +212,17 @@ export function Card({ card, onChanged }: { card: CardT; onChanged: () => void }
           Dismiss
         </Button>
       </div>
+
+      {why && (
+        <div className="space-y-3 border-t border-slate-800/80 bg-slate-950/30 p-3">
+          <Breakdown dimensions={card.dimensions} />
+          {card.missing.length > 0 && (
+            <p className="text-xs leading-relaxed text-slate-500">
+              <span className="text-slate-600">Missing:</span> {card.missing.join(', ')}
+            </p>
+          )}
+        </div>
+      )}
 
       {open && (
         <div className="space-y-2 border-t border-slate-800/80 p-3">
