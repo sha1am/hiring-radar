@@ -32,18 +32,19 @@ export function useEvents(onTick: () => void, debounceMs = 400) {
   }, [debounceMs])
 }
 
-export type View = 'radar' | 'outbox' | 'settings'
+export const VIEWS = ['queue', 'radar', 'outbox', 'status', 'settings'] as const
+export type View = (typeof VIEWS)[number]
 
-/// Which view is showing, kept in the URL hash.
+/// Which tab is showing, kept in the URL hash.
 ///
-/// Not a router dependency: three views, no parameters, no nesting. What the
-/// hash buys is that the browser back button works and a view can be
-/// bookmarked — which is the actual reason people notice a missing router, not
+/// Not a router dependency: five flat views, no parameters, no nesting. What
+/// the hash buys is that Back works and a tab can be bookmarked or sent to
+/// yourself — which is the actual reason people notice a missing router, not
 /// the routing itself.
 export function useView(): [View, (v: View) => void] {
   const read = (): View => {
-    const h = window.location.hash.replace(/^#\/?/, '')
-    return h === 'outbox' || h === 'settings' ? h : 'radar'
+    const h = window.location.hash.replace(/^#\/?/, '').split('?')[0]
+    return (VIEWS as readonly string[]).includes(h) ? (h as View) : 'queue'
   }
   const [view, setView] = useState<View>(read)
 
@@ -54,7 +55,11 @@ export function useView(): [View, (v: View) => void] {
   }, [])
 
   const go = useCallback((v: View) => {
-    window.location.hash = v === 'radar' ? '/' : `/${v}`
+    // The radar's filters live in the same hash, so switching tabs keeps them —
+    // coming back to a board you had filtered and finding it reset is the
+    // failure this whole scheme exists to avoid.
+    const qs = window.location.hash.split('?')[1]
+    window.location.hash = `/${v}${qs ? `?${qs}` : ''}`
     setView(v)
   }, [])
 
@@ -80,6 +85,10 @@ export function useFilters(defaultHours: number): [Filters, (f: Filters) => void
       tier: p.get('tier') ?? '',
       min: p.get('min') ?? '',
       tags: (p.get('tags') ?? '').split(',').filter(Boolean),
+      roles: (p.get('roles') ?? '').split(',').filter(Boolean),
+      levels: (p.get('levels') ?? '').split(',').filter(Boolean),
+      modes: (p.get('modes') ?? '').split(',').filter(Boolean),
+      yrsHave: p.get('yrs_have') ?? '',
     }
   }, [defaultHours])
 
@@ -95,6 +104,10 @@ export function useFilters(defaultHours: number): [Filters, (f: Filters) => void
     if (f.tier) p.set('tier', f.tier)
     if (f.min) p.set('min', f.min)
     if (f.tags.length) p.set('tags', f.tags.join(','))
+    if (f.roles.length) p.set('roles', f.roles.join(','))
+    if (f.levels.length) p.set('levels', f.levels.join(','))
+    if (f.modes.length) p.set('modes', f.modes.join(','))
+    if (f.yrsHave) p.set('yrs_have', f.yrsHave)
     const base = window.location.hash.split('?')[0] || '#/'
     const qs = p.toString()
     // replaceState, not assignment: typing in the search box should not push a

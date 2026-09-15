@@ -30,6 +30,13 @@ const SENIORITY_HIT: f64 = 12.0;
 const SENIORITY_MISS: f64 = -20.0;
 const CONTENT: f64 = 38.0;
 const SALARY_PENALTY: f64 = -30.0;
+/// What it costs to be about a language you don't write, under "prefer".
+///
+/// Sized to actually decide the question rather than nudge it. A senior backend
+/// role in your city banks 62 structural points before content is considered,
+/// so anything smaller than this leaves a Ruby job comfortably above a floor of
+/// 55 — which is exactly the complaint this exists to answer.
+const STACK_PENALTY: f64 = -35.0;
 
 impl Scorer for LexicalScorer {
     fn score(&self, post: &RawPost, p: &Settings, m: &Matcher) -> (f64, Vec<String>) {
@@ -106,6 +113,14 @@ impl Scorer for LexicalScorer {
             s += SENIORITY_MISS;
         } else if p.seniority.iter().any(|w| level_hay.contains(&w.to_lowercase())) {
             s += SENIORITY_HIT;
+        }
+
+        // --- stack ---
+        // Only a penalty, never a bonus: the languages you want are already
+        // rewarded through content coverage, and paying twice for them would
+        // just re-tune the whole budget.
+        if stack_verdict(post, p) == StackVerdict::Mismatch {
+            s += STACK_PENALTY;
         }
 
         // --- optional salary floor ---
@@ -494,5 +509,135 @@ mod tests {
         assert!((fresh - 100.0).abs() < 0.01);
         assert!((two_h - 70.0).abs() < 0.01, "2h half-life => 0.4+0.6*0.5");
         assert!(ancient >= 40.0, "never decays below the 40% floor");
+    }
+}
+
+// ===================== stack =====================
+
+/// Whether a post is about the languages you actually write.
+///
+/// The same shape as [`LocationVerdict`], and for the same reason. Everything
+/// else in the budget is a *bonus*: a senior backend role in Bengaluru collects
+/// forty points for its title, ten for its location and twelve for its level
+/// before anyone asks what language it is in — so a Ruby job at a company you
+/// like scores in the seventies on structure alone, and the fact that you have
+/// never written Ruby costs it nothing. A bonus can be outvoted. A gate cannot.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum StackVerdict {
+    /// Names at least one language you want.
+    Match,
+    /// Names languages, none of them yours.
+    Mismatch,
+    /// Names no language at all — a bare "Backend Engineer" listing.
+    Unknown,
+    /// Mismatched, under a policy that says don't show me those.
+    Rejected,
+}
+
+/// Compare a post's detected languages against the profile's.
+///
+/// Overlap is enough: "Go, with some legacy Ruby" is a Go job, and a stack
+/// filter that demanded purity would throw away most of the interesting ones.
+pub fn stack_verdict(post: &RawPost, p: &Settings) -> StackVerdict {
+    if p.stack_policy == "off" || p.stack.is_empty() {
+        return StackVerdict::Unknown;
+    }
+
+    let found = crate::tags::languages(&crate::tags::extract(&post.haystack()));
+    if found.is_empty() {
+        return StackVerdict::Unknown;
+    }
+
+    let wanted: Vec<String> = p.stack.iter().map(|s| s.trim().to_lowercase()).collect();
+    if found
+        .iter()
+        .any(|f| wanted.iter().any(|w| w == &f.to_lowercase()))
+    {
+        return StackVerdict::Match;
+    }
+
+    if p.stack_policy == "require" {
+        StackVerdict::Rejected
+    } else {
+        StackVerdict::Mismatch
+    }
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::*;
+    use crate::model::ApplyChannel;
+
+    fn post(body: &str) -> RawPost {
+        RawPost {
+            source: "greenhouse".into(),
+            external_id: "x".into(),
+            url: "https://e.com".into(),
+            title: "Senior Backend Engineer".into(),
+            company: "Acme".into(),
+            location: Some("Bengaluru, India".into()),
+            body: body.into(),
+            posted_at: None,
+            apply: ApplyChannel::Unknown,
+            synthetic_title: false,
+        }
+    }
+
+    fn settings(policy: &str, stack: &[&str]) -> Settings {
+        let mut s: Settings = serde_json::from_str("{}").unwrap();
+        s.stack_policy = policy.into();
+        s.stack = stack.iter().map(|x| x.to_string()).collect();
+        s
+    }
+
+    #[test]
+    fn a_ruby_job_is_a_mismatch_for_a_go_engineer() {
+        let p = settings("prefer", &["go", "python"]);
+        assert_eq!(stack_verdict(&post("Ruby on Rails, Sidekiq"), &p), StackVerdict::Mismatch);
+    }
+
+    #[test]
+    fn overlap_is_enough_because_legacy_code_exists() {
+        // "Go, with some legacy Ruby" is a Go job. A filter demanding purity
+        // would throw away most of the interesting ones.
+        let p = settings("require", &["go"]);
+        assert_eq!(
+            stack_verdict(&post("Mostly Golang; some legacy Ruby to migrate"), &p),
+            StackVerdict::Match
+        );
+    }
+
+    #[test]
+    fn require_rejects_rather_than_merely_penalising() {
+        let p = settings("require", &["go"]);
+        assert_eq!(stack_verdict(&post("Java and Spring Boot"), &p), StackVerdict::Rejected);
+    }
+
+    #[test]
+    fn a_listing_that_names_no_language_stays_unknown() {
+        // Plenty of real listings never name one. Rejecting those outright
+        // would be a filter on how the description was written.
+        let p = settings("require", &["go"]);
+        assert_eq!(
+            stack_verdict(&post("You will own services end to end."), &p),
+            StackVerdict::Unknown
+        );
+    }
+
+    #[test]
+    fn databases_and_clouds_get_no_vote() {
+        // "They use MySQL and I use Postgres" is not a reason to skip a job —
+        // you would learn it on the Monday. Only languages count.
+        let p = settings("require", &["go"]);
+        assert_eq!(
+            stack_verdict(&post("MySQL, DynamoDB, AWS, Kubernetes"), &p),
+            StackVerdict::Unknown
+        );
+    }
+
+    #[test]
+    fn an_empty_stack_list_disables_the_gate_entirely() {
+        let p = settings("require", &[]);
+        assert_eq!(stack_verdict(&post("Ruby on Rails"), &p), StackVerdict::Unknown);
     }
 }

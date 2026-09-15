@@ -166,6 +166,33 @@ pub struct Candidate {
     /// Technologies detected in the post, comma-delimited with leading and
     /// trailing commas so a SQL containment test cannot prefix-match.
     pub tags: Option<String>,
+
+    // ---- structured facts (see enrich.rs) ----
+    // Written by the heuristics at ingest and refined by the LLM pass. Columns
+    // rather than a JSON blob because each one is something you filter by.
+    pub role: Option<String>,
+    pub level: Option<String>,
+    pub years_min: Option<i64>,
+    pub years_max: Option<i64>,
+    pub work_mode: Option<String>,
+    pub employment: Option<String>,
+    /// NULL until the LLM pass has read this row. Doubles as the work queue.
+    pub enriched_at: Option<i64>,
+}
+
+impl Candidate {
+    /// The structured facts, as the enricher's own type.
+    pub fn facts(&self) -> crate::enrich::Facts {
+        crate::enrich::Facts {
+            role: self.role.clone(),
+            level: self.level.clone(),
+            years_min: self.years_min,
+            years_max: self.years_max,
+            work_mode: self.work_mode.clone(),
+            employment: self.employment.clone(),
+            stack: self.tags.as_deref().map(crate::tags::decode).unwrap_or_default(),
+        }
+    }
 }
 
 impl Candidate {

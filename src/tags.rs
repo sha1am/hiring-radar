@@ -132,6 +132,27 @@ pub fn extract(text: &str) -> Vec<String> {
     out
 }
 
+/// The labels that name a *language*, as opposed to a database, a cloud or a
+/// framework.
+///
+/// The distinction matters for the stack gate: "this job is Ruby and I write
+/// Go" is a real reason to skip a posting, while "this job uses MySQL and I use
+/// Postgres" is not — you would learn MySQL on the Monday. So only languages
+/// get a vote on whether a post is about your stack at all.
+pub const LANGUAGES: &[&str] = &[
+    "Go", "Rust", "Python", "Java", "Kotlin", "Scala", "TypeScript", "JavaScript",
+    "C++", "C#", "Ruby", "PHP", "Elixir", "Clojure",
+];
+
+pub fn is_language(label: &str) -> bool {
+    LANGUAGES.iter().any(|l| l.eq_ignore_ascii_case(label.trim()))
+}
+
+/// Just the languages a post names.
+pub fn languages(tags: &[String]) -> Vec<String> {
+    tags.iter().filter(|t| is_language(t)).cloned().collect()
+}
+
 /// Storage form: comma-delimited with leading and trailing commas, so a SQL
 /// `instr(tags, ',Go,')` cannot match "Golang" or "Django" by accident.
 pub fn encode(tags: &[String]) -> Option<String> {

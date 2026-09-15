@@ -322,6 +322,28 @@ export function SettingsPanel() {
           onChange={(v) => set('seniority', v)}
         />
         <ListField
+          label="Languages you write"
+          hint="One per line: go, python, rust. This is a gate, not a bonus — see below."
+          value={s.stack}
+          rows={4}
+          onChange={(v) => set('stack', v)}
+        />
+        <Field
+          label="How much the stack counts"
+          hint="A senior backend role in your city banks 62 points for its title, location and level before anything asks what language it's in — which is why a Ruby job scores in the seventies and lands on your board. This is what asks. A listing that names no language at all is never judged either way."
+        >
+          <select
+            value={s.stack_policy}
+            onChange={(e) => set('stack_policy', e.target.value as Settings['stack_policy'])}
+            className={input}
+          >
+            <option value="off">off — any language</option>
+            <option value="prefer">prefer — penalise other languages heavily</option>
+            <option value="require">require — discard them outright</option>
+          </select>
+        </Field>
+
+        <ListField
           label="Dealbreakers"
           hint="One per line. Any hit zeroes the post outright — keep these specific."
           value={s.dealbreakers}

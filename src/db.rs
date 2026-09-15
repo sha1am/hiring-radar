@@ -80,6 +80,20 @@ const SCHEMA: &[&str] = &[
 const MIGRATIONS: &[&str] = &[
     "ALTER TABLE candidates ADD COLUMN match_terms TEXT",
     "ALTER TABLE candidates ADD COLUMN tags TEXT",
+    // Structured facts, from the heuristics at ingest and refined by the LLM
+    // pass. Separate columns rather than a JSON blob because every one of them
+    // is something you filter and facet by, and SQLite cannot index into JSON
+    // without extracting it on every row.
+    "ALTER TABLE candidates ADD COLUMN role TEXT",
+    "ALTER TABLE candidates ADD COLUMN level TEXT",
+    "ALTER TABLE candidates ADD COLUMN years_min INTEGER",
+    "ALTER TABLE candidates ADD COLUMN years_max INTEGER",
+    "ALTER TABLE candidates ADD COLUMN work_mode TEXT",
+    "ALTER TABLE candidates ADD COLUMN employment TEXT",
+    // NULL means the LLM pass has not looked at this row yet. That is the whole
+    // work queue — no separate table, and it survives a restart for free.
+    "ALTER TABLE candidates ADD COLUMN enriched_at INTEGER",
+    "CREATE INDEX IF NOT EXISTS idx_candidates_unenriched ON candidates(enriched_at) WHERE enriched_at IS NULL",
 ];
 
 pub async fn connect(url: &str) -> anyhow::Result<SqlitePool> {
@@ -242,6 +256,14 @@ pub struct NewCandidate {
     pub draft_body: Option<String>,
     pub match_terms: Option<String>,
     pub tags: Option<String>,
+    /// The heuristic reading, done at ingest so the filters work immediately.
+    /// The LLM pass refines these later; see `enrich`.
+    pub role: Option<String>,
+    pub level: Option<String>,
+    pub years_min: Option<i64>,
+    pub years_max: Option<i64>,
+    pub work_mode: Option<String>,
+    pub employment: Option<String>,
 }
 
 /// `status` is 'scored' for live detections and 'backfilled' for the first
@@ -257,8 +279,9 @@ pub async fn insert_candidate(
         "INSERT INTO candidates
          (urn, source, url, title, company, location, body, score, priority, tier, status,
           detected_at, posted_at, expires_at, settle_until, apply_kind, apply_target,
-          draft_subject, draft_body, match_terms, tags)
-         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?,?)
+          draft_subject, draft_body, match_terms, tags,
+          role, level, years_min, years_max, work_mode, employment)
+         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?)
          ON CONFLICT(urn) DO NOTHING",
     )
     .bind(&c.urn)
@@ -282,6 +305,12 @@ pub async fn insert_candidate(
     .bind(&c.draft_body)
     .bind(&c.match_terms)
     .bind(&c.tags)
+    .bind(&c.role)
+    .bind(&c.level)
+    .bind(c.years_min)
+    .bind(c.years_max)
+    .bind(&c.work_mode)
+    .bind(&c.employment)
     .execute(pool)
     .await?;
     Ok(())
@@ -353,6 +382,19 @@ pub struct RadarFilter {
     /// Selected tech chips. These OR together: chips are a net for scanning,
     /// not a sieve — picking Go and Rust should widen the board to both.
     pub tags: Vec<String>,
+
+    // ---- structured facts (see enrich.rs) ----
+    // These AND with everything else but OR within themselves, for the same
+    // reason as the tags: picking "backend" and "sre" means "either of those",
+    // and the intersection would always be empty.
+    pub roles: Vec<String>,
+    pub levels: Vec<String>,
+    pub work_modes: Vec<String>,
+    /// "how much experience are they asking for" as a band you can sit inside.
+    /// A listing with no stated years passes both, because filtering it out
+    /// would be filtering on how the description was written.
+    pub years_max_wanted: Option<i64>,
+    pub years_min_wanted: Option<i64>,
 }
 
 impl RadarFilter {
@@ -383,6 +425,34 @@ pub async fn recent_filtered(
         format!(" AND ({ors})")
     };
 
+    // One IN (?,?,?) clause per selected fact, built from placeholders and
+    // bound — never interpolated. The column names come from this file, the
+    // values come from a URL.
+    let in_clause = |col: &str, vals: &[String]| -> String {
+        if vals.is_empty() {
+            String::new()
+        } else {
+            let marks = vec!["?"; vals.len()].join(",");
+            format!(" AND {col} IN ({marks})")
+        }
+    };
+    let role_clause = in_clause("role", &f.roles);
+    let level_clause = in_clause("level", &f.levels);
+    let mode_clause = in_clause("work_mode", &f.work_modes);
+
+    // A listing that states no years passes either bound. Dropping those would
+    // be filtering on how the description was written, not on the job.
+    let years_clause = {
+        let mut c = String::new();
+        if f.years_max_wanted.is_some() {
+            c.push_str(" AND (years_min IS NULL OR years_min <= ?)");
+        }
+        if f.years_min_wanted.is_some() {
+            c.push_str(" AND (years_max IS NULL OR years_max >= ?)");
+        }
+        c
+    };
+
     let sql = format!(
         "SELECT * FROM candidates
          WHERE COALESCE(posted_at, detected_at) > ?
@@ -396,7 +466,7 @@ pub async fn recent_filtered(
               OR lower(COALESCE(location, '')) LIKE ?
               OR lower(COALESCE(match_terms, '')) LIKE ?
            ))
-         {tag_clause}
+         {tag_clause}{role_clause}{level_clause}{mode_clause}{years_clause}
          ORDER BY COALESCE(posted_at, detected_at) DESC
          LIMIT ?"
     );
@@ -418,6 +488,16 @@ pub async fn recent_filtered(
 
     for t in &f.tags {
         query = query.bind(crate::tags::needle(t));
+    }
+    // Bound in the same order the clauses were appended above.
+    for v in f.roles.iter().chain(&f.levels).chain(&f.work_modes) {
+        query = query.bind(v.clone());
+    }
+    if let Some(n) = f.years_max_wanted {
+        query = query.bind(n);
+    }
+    if let Some(n) = f.years_min_wanted {
+        query = query.bind(n);
     }
 
     let rows = query.bind(limit).fetch_all(pool).await?;
@@ -631,4 +711,92 @@ pub async fn mark_digested(pool: &SqlitePool, ids: &[i64]) -> anyhow::Result<()>
             .await?;
     }
     Ok(())
+}
+
+// ===================== enrichment =====================
+
+/// Rows the LLM pass has not looked at yet, newest first.
+///
+/// The work queue is a NULL column rather than a separate table: it survives a
+/// restart for free, it cannot drift out of sync with the rows it describes, and
+/// deleting a candidate deletes its queue entry. Newest first because a backlog
+/// is worth clearing in the order you would actually read it — the posting from
+/// an hour ago matters more than the one from Tuesday.
+pub async fn unenriched(pool: &SqlitePool, limit: i64) -> anyhow::Result<Vec<Candidate>> {
+    let rows = sqlx::query_as::<_, Candidate>(
+        "SELECT * FROM candidates
+         WHERE enriched_at IS NULL
+         ORDER BY COALESCE(posted_at, detected_at) DESC
+         LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Write back what the model read, and mark the row done.
+///
+/// `enriched_at` is set even when nothing changed, so a posting the model has no
+/// opinion about is not re-read forever.
+pub async fn set_facts(
+    pool: &SqlitePool,
+    id: i64,
+    f: &crate::enrich::Facts,
+    tags: Option<String>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE candidates
+         SET role = ?, level = ?, years_min = ?, years_max = ?,
+             work_mode = ?, employment = ?, tags = ?, enriched_at = ?
+         WHERE id = ?",
+    )
+    .bind(&f.role)
+    .bind(&f.level)
+    .bind(f.years_min)
+    .bind(f.years_max)
+    .bind(&f.work_mode)
+    .bind(&f.employment)
+    .bind(tags)
+    .bind(now())
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// How many rows are still waiting, for the status panel.
+pub async fn unenriched_count(pool: &SqlitePool) -> anyhow::Result<i64> {
+    let (n,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM candidates WHERE enriched_at IS NULL")
+            .fetch_one(pool)
+            .await?;
+    Ok(n)
+}
+
+/// Distinct values of one enrichment column in the window, with counts.
+///
+/// Facets have to come from what is actually on the board: offering a "staff"
+/// chip when nothing is staff-level is a filter that can only disappoint. The
+/// column name is not user input — it comes from a fixed list in the caller —
+/// so interpolating it is safe here in a way it would never be for a value.
+pub async fn fact_facets(
+    pool: &SqlitePool,
+    column: &str,
+    window_secs: i64,
+) -> anyhow::Result<Vec<(String, i64)>> {
+    const ALLOWED: &[&str] = &["role", "level", "work_mode", "employment"];
+    if !ALLOWED.contains(&column) {
+        anyhow::bail!("not a facetable column: {column}");
+    }
+    let cutoff = now() - window_secs;
+    let rows: Vec<(String, i64)> = sqlx::query_as(&format!(
+        "SELECT {column}, COUNT(*) FROM candidates
+         WHERE COALESCE(posted_at, detected_at) > ? AND {column} IS NOT NULL AND {column} != ''
+         GROUP BY {column} ORDER BY COUNT(*) DESC"
+    ))
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }

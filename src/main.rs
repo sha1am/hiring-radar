@@ -3,6 +3,7 @@ mod classify;
 mod config;
 mod db;
 mod draft;
+mod enrich;
 mod geo;
 mod model;
 mod notify;
@@ -55,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     let drafter: Arc<dyn draft::Drafter> = Arc::from(draft::build_drafter(&cfg.draft, http.clone()));
+    let enricher: Arc<dyn enrich::Enricher> = Arc::from(enrich::build_enricher(&cfg.draft, http.clone()));
     let (events, _) = tokio::sync::broadcast::channel::<()>(64);
 
     // config.toml seeds the settings the first time only; after that the stored
@@ -93,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
         cfg: cfg.clone(),
         http: http.clone(),
         drafter,
+        enricher,
         events,
         settings: Arc::new(tokio::sync::RwLock::new(Arc::new(live))),
         matcher: Arc::new(tokio::sync::RwLock::new(Arc::new(matcher))),
@@ -150,6 +153,25 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         });
+    }
+
+    // ---- LLM enrichment, in the background ----
+    //
+    // Deliberately not inline with the crawl. Inference takes seconds per
+    // posting, and a crawl that waits for it would turn a 90-second cycle into
+    // an hour and miss the posts it exists to catch. The heuristics already ran
+    // at ingest, so the board is filterable the whole time this is working
+    // through the backlog — this only sharpens it.
+    if state.enricher.is_llm() {
+        let st = state.clone();
+        tokio::spawn(async move {
+            enrich_loop(st).await;
+        });
+    } else {
+        tracing::info!(
+            "no model configured for enrichment; filters use the heuristic reading \
+             (set draft.provider = \"ollama\" in config.toml to sharpen them)"
+        );
     }
 
     // ---- persist the IDF corpus periodically ----
@@ -297,6 +319,67 @@ async fn crawl_loop(state: AppState, source: Box<dyn JobSource>, interval: u64, 
         state.with_status(&name, |s| s.end_cycle(wait)).await;
         state.notify_ui();
         tokio::time::sleep(Duration::from_secs(wait)).await;
+    }
+}
+
+/// Read un-enriched candidates with the model, a few at a time, forever.
+///
+/// Small batches with a pause between them, rather than draining the queue as
+/// fast as the model will answer: this shares a machine with whatever else you
+/// are running, and a local model given unbounded work will take every core it
+/// can reach. The backlog is not urgent — the row is already on the board with
+/// its heuristic reading.
+async fn enrich_loop(state: AppState) {
+    /// Postings per pass.
+    const BATCH: i64 = 5;
+    /// Between passes when there was work. Long enough to stay a background
+    /// task rather than a load test.
+    const BUSY_PAUSE_SECS: u64 = 10;
+    /// Between passes when the queue was empty.
+    const IDLE_PAUSE_SECS: u64 = 120;
+
+    loop {
+        let batch = db::unenriched(&state.pool, BATCH).await.unwrap_or_default();
+        if batch.is_empty() {
+            tokio::time::sleep(Duration::from_secs(IDLE_PAUSE_SECS)).await;
+            continue;
+        }
+
+        for c in &batch {
+            let post = model::RawPost {
+                source: c.source.clone(),
+                external_id: c.urn.clone(),
+                url: c.url.clone(),
+                title: c.title.clone(),
+                company: c.company.clone(),
+                location: c.location.clone(),
+                body: c.body.clone(),
+                posted_at: c.posted_at,
+                apply: c.apply(),
+                synthetic_title: c.source == "linkedin_voyager",
+            };
+
+            // Start from what is already stored and let the model refine it, so
+            // a model with no opinion leaves the row exactly as it was.
+            let mut facts = c.facts();
+            match state.enricher.read(&post).await {
+                Some(read) => facts.merge_from(read),
+                None => tracing::debug!(id = c.id, "enricher had no opinion"),
+            }
+
+            let tags = tags::encode(&facts.stack);
+            if let Err(e) = db::set_facts(&state.pool, c.id, &facts, tags).await {
+                tracing::warn!(id = c.id, %e, "enrichment writeback failed");
+                // Leave enriched_at NULL so it is retried rather than silently
+                // dropped — but sleep first, because a failing database will
+                // otherwise spin this loop.
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+        }
+
+        tracing::info!(read = batch.len(), "enriched a batch");
+        state.notify_ui();
+        tokio::time::sleep(Duration::from_secs(BUSY_PAUSE_SECS)).await;
     }
 }
 

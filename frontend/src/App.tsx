@@ -1,71 +1,135 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getBootstrap, getOutbox, getRadar, getStatus } from './api'
-import { useEvents, useFilters, useView } from './hooks'
-import type { Bootstrap, Card as CardT, OutboxPage, RadarPage } from './types'
+import { useEvents, useFilters, useView, type View } from './hooks'
+import type { Bootstrap, Card as CardT, OutboxPage, RadarPage, Status } from './types'
 import { Card, RadarRow } from './components/Card'
-import { FilterBar, TagChips } from './components/Filters'
+import { FacetChips, FilterBar, TagChips } from './components/Filters'
 import { SettingsPanel } from './components/SettingsView'
 import { StatusPanel } from './components/StatusPanel'
 
+const LEVEL_DOT: Record<string, string> = {
+  ok: 'bg-emerald-400',
+  info: 'bg-sky-400',
+  warn: 'bg-amber-400',
+  error: 'bg-rose-400',
+}
+
+/// One tab per thing you do, rather than one page with everything on it.
+///
+/// The three activities barely overlap: triaging what's waiting, scanning
+/// everything crawled, and working through drafts are different sittings, and
+/// stacking them meant the list you wanted was always below two you didn't.
+/// Status gets its own tab for the same reason — it is what you open when
+/// something is wrong, not something to read past every time.
 function Nav({
   view,
   go,
-  outboxCount,
+  counts,
+  level,
 }: {
-  view: string
-  go: (v: 'radar' | 'outbox' | 'settings') => void
-  outboxCount: number
+  view: View
+  go: (v: View) => void
+  counts: Partial<Record<View, number>>
+  level: string
 }) {
-  const tab = (v: 'radar' | 'outbox' | 'settings', label: string, badge?: number) => (
-    <button
-      onClick={() => go(v)}
-      className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-        view === v ? 'bg-slate-800 text-slate-100' : 'text-slate-400 hover:text-slate-200'
-      }`}
-    >
-      {label}
-      {badge ? (
-        <span className="ml-1.5 rounded-full bg-sky-500/20 px-1.5 py-0.5 text-sky-300">{badge}</span>
-      ) : null}
-    </button>
-  )
+  const TABS: [View, string][] = [
+    ['queue', 'queue'],
+    ['radar', 'radar'],
+    ['outbox', 'outbox'],
+    ['status', 'status'],
+    ['settings', 'settings'],
+  ]
 
   return (
-    <header className="mb-5 flex items-center justify-between">
-      <button onClick={() => go('radar')} className="flex items-center gap-2">
+    <header className="mb-5">
+      <div className="mb-3 flex items-center gap-2">
         <span aria-hidden className="text-lg">
           📡
         </span>
         <h1 className="text-base font-semibold text-slate-100">Hiring Radar</h1>
-      </button>
-      <nav className="flex items-center gap-1">
-        {tab('radar', 'radar')}
-        {tab('outbox', 'outbox', outboxCount)}
-        {tab('settings', 'settings')}
+      </div>
+
+      <nav className="flex flex-wrap items-center gap-1 border-b border-slate-800 pb-px">
+        {TABS.map(([v, label]) => {
+          const n = counts[v]
+          const active = view === v
+          return (
+            <button
+              key={v}
+              onClick={() => go(v)}
+              aria-current={active ? 'page' : undefined}
+              className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-xs transition-colors ${
+                active
+                  ? 'border-sky-400 text-slate-100'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {/* The status tab carries the severity dot, so a failing source is
+                  visible from any tab without having to open this one. */}
+              {v === 'status' && (
+                <span className={`h-1.5 w-1.5 rounded-full ${LEVEL_DOT[level] ?? 'bg-slate-600'}`} />
+              )}
+              {label}
+              {n ? (
+                <span className="rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300">
+                  {n}
+                </span>
+              ) : null}
+            </button>
+          )
+        })}
       </nav>
     </header>
   )
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="py-8 text-center text-sm text-slate-500">{children}</p>
+  return <p className="py-10 text-center text-sm text-slate-500">{children}</p>
 }
 
-function QueueSection({ queue, reload }: { queue: CardT[]; reload: () => void }) {
-  if (queue.length === 0) return null
+/// The one-line diagnosis, on every tab except Status.
+///
+/// The detail belongs on its own tab, but "every target failed" is not
+/// something to discover by navigating — an empty queue and a broken crawler
+/// look identical, and the whole point is that you shouldn't have to guess.
+function Banner({ status, go }: { status: Status; go: (v: View) => void }) {
+  if (status.level === 'ok') return null
+  const tone =
+    status.level === 'error'
+      ? 'bg-rose-500/10 text-rose-300 ring-rose-500/30'
+      : status.level === 'warn'
+        ? 'bg-amber-500/10 text-amber-300 ring-amber-500/30'
+        : 'bg-sky-500/10 text-sky-300 ring-sky-500/30'
+  return (
+    <button
+      onClick={() => go('status')}
+      className={`mb-4 flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-xs ring-1 ${tone}`}
+    >
+      <span className="flex-1">{status.message}</span>
+      <span className="shrink-0 opacity-60">details →</span>
+    </button>
+  )
+}
+
+function QueueView({ queue, reload }: { queue: CardT[]; reload: () => void }) {
   return (
     <section className="space-y-3">
       <h2 className="text-sm uppercase tracking-wide text-slate-400">
         Waiting on you <span className="text-slate-600">· {queue.length}</span>
       </h2>
-      {queue.map((c) => (
-        <Card key={c.id} card={c} onChanged={reload} />
-      ))}
+      {queue.length === 0 ? (
+        <Empty>
+          Nothing is waiting. Alerts land here when a post clears the strong bar — everything else
+          is on the radar, and everything worth applying to is in the outbox.
+        </Empty>
+      ) : (
+        queue.map((c) => <Card key={c.id} card={c} onChanged={reload} />)
+      )}
     </section>
   )
 }
 
-function RadarSection({
+function RadarView({
   radar,
   filters,
   setFilters,
@@ -85,7 +149,36 @@ function RadarSection({
         shown={radar.items.length}
         total={radar.total_in_window}
       />
-      <TagChips filters={filters} setFilters={setFilters} tags={radar.tags} />
+      <div className="space-y-1.5">
+        <FacetChips
+          label="role"
+          facets={radar.roles}
+          selected={filters.roles}
+          onChange={(v) => setFilters({ ...filters, roles: v })}
+        />
+        <FacetChips
+          label="level"
+          facets={radar.levels}
+          selected={filters.levels}
+          onChange={(v) => setFilters({ ...filters, levels: v })}
+        />
+        <FacetChips
+          label="where"
+          facets={radar.work_modes}
+          selected={filters.modes}
+          onChange={(v) => setFilters({ ...filters, modes: v })}
+        />
+        <TagChips filters={filters} setFilters={setFilters} tags={radar.tags} />
+      </div>
+
+      {/* The facts sharpen as the model works through the backlog, so a board
+          that quietly changes under you says why. */}
+      {radar.pending_enrichment > 0 && (
+        <p className="text-xs text-slate-600">
+          {radar.pending_enrichment} posting{radar.pending_enrichment === 1 ? '' : 's'} still being
+          read — role, level and years will sharpen as that finishes.
+        </p>
+      )}
       {radar.items.length === 0 ? (
         <Empty>
           Nothing matches those filters in the last {filters.hours}h. Widen the window, or clear the
@@ -102,7 +195,15 @@ function RadarSection({
   )
 }
 
-function OutboxSection({ outbox, reload }: { outbox: OutboxPage; reload: () => void }) {
+function OutboxView({
+  outbox,
+  reload,
+  go,
+}: {
+  outbox: OutboxPage
+  reload: () => void
+  go: (v: View) => void
+}) {
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between">
@@ -112,14 +213,14 @@ function OutboxSection({ outbox, reload }: { outbox: OutboxPage; reload: () => v
             · {outbox.total} at {outbox.min_score}+
           </span>
         </h2>
-        <a href="#/settings" className="text-xs text-slate-500 hover:text-slate-300">
+        <button onClick={() => go('settings')} className="text-xs text-slate-500 hover:text-slate-300">
           tune the bar →
-        </a>
+        </button>
       </div>
-      {/* Deliberately not the same list as the alert queue. That one holds only
-          what fired a notification, and notifications are capped at a few an
-          hour — a post that scored 88 on a busy morning is no less worth
-          applying to for having missed a slot. */}
+      {/* Deliberately not the same list as the queue. That one holds only what
+          fired a notification, and notifications are capped at a few an hour —
+          a post that scored 88 on a busy morning is no less worth applying to
+          for having missed a slot. */}
       {outbox.items.length === 0 ? (
         <Empty>
           Nothing at or above {outbox.min_score} yet. Lower the bar in settings, or wait for the next
@@ -145,8 +246,7 @@ export default function App() {
   /// other about what is in the outbox.
   const loadAll = useCallback(async () => {
     try {
-      const b = await getBootstrap(filters)
-      setData(b)
+      setData(await getBootstrap(filters))
       setError(null)
       setStale(false)
     } catch (e) {
@@ -196,7 +296,7 @@ export default function App() {
   if (!data) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-8">
-        <Nav view={view} go={go} outboxCount={0} />
+        <Nav view={view} go={go} counts={{}} level="info" />
         {error ? (
           <p className="text-sm text-rose-400">Can't reach the radar — {error}</p>
         ) : (
@@ -208,7 +308,12 @@ export default function App() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
-      <Nav view={view} go={go} outboxCount={data.status.outbox_count} />
+      <Nav
+        view={view}
+        go={go}
+        level={data.status.level}
+        counts={{ queue: data.queue.length, outbox: data.status.outbox_count }}
+      />
 
       {stale && (
         <p className="mb-3 rounded-md bg-rose-500/10 px-3 py-2 text-xs text-rose-300 ring-1 ring-rose-500/30">
@@ -216,17 +321,13 @@ export default function App() {
         </p>
       )}
 
-      {view === 'settings' ? (
-        <SettingsPanel />
-      ) : view === 'outbox' ? (
-        <OutboxSection outbox={data.outbox} reload={reload} />
-      ) : (
-        <div className="space-y-8">
-          <StatusPanel status={data.status} />
-          <QueueSection queue={data.queue} reload={reload} />
-          <RadarSection radar={data.radar} filters={filters} setFilters={setFilters} />
-        </div>
-      )}
+      {view !== 'status' && view !== 'settings' && <Banner status={data.status} go={go} />}
+
+      {view === 'settings' && <SettingsPanel />}
+      {view === 'status' && <StatusPanel status={data.status} />}
+      {view === 'outbox' && <OutboxView outbox={data.outbox} reload={reload} go={go} />}
+      {view === 'queue' && <QueueView queue={data.queue} reload={reload} />}
+      {view === 'radar' && <RadarView radar={data.radar} filters={filters} setFilters={setFilters} />}
     </div>
   )
 }

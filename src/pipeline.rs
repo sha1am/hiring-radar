@@ -51,6 +51,14 @@ pub async fn ingest(
         return Ok(Outcome::WrongLocation);
     }
 
+    // 2b. Stack gate, for the same reason and in the same place as location:
+    //     a post dropped for being in the wrong language should say so, not
+    //     surface as an unexplained low score.
+    if crate::score::stack_verdict(&post, &live) == crate::score::StackVerdict::Rejected {
+        tracing::debug!(title = %post.title, "dropped: not in the configured stack");
+        return Ok(Outcome::WrongStack);
+    }
+
     // 3. Score against the profile + resume.
     let matcher = state.matcher().await;
     let scorer = LexicalScorer;
@@ -83,6 +91,10 @@ pub async fn ingest(
         (None, None)
     };
 
+    // Heuristic reading, now, so the filters work on a fresh install with no
+    // model configured. The LLM pass refines this in the background.
+    let facts = crate::enrich::heuristic(&post);
+
     let nc = db::NewCandidate {
         urn: post.urn(),
         source: post.source.clone(),
@@ -99,7 +111,13 @@ pub async fn ingest(
         expires_at,
         settle_until,
         match_terms: if matched.is_empty() { None } else { Some(matched.join(", ")) },
-        tags: crate::tags::encode(&crate::tags::extract(&post.haystack())),
+        tags: crate::tags::encode(&facts.stack),
+        role: facts.role.clone(),
+        level: facts.level.clone(),
+        years_min: facts.years_min,
+        years_max: facts.years_max,
+        work_mode: facts.work_mode.clone(),
+        employment: facts.employment.clone(),
         apply_kind: post.apply.kind().to_string(),
         apply_target: post.apply.target(),
         draft_subject,

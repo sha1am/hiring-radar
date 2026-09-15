@@ -62,6 +62,7 @@ function SourceRow({ s }: { s: Source }) {
           {s.fetched} fetched · {s.new_posts} new · {s.stored} kept
           {s.below_floor > 0 && ` · ${s.below_floor} below floor`}
           {s.wrong_location > 0 && ` · ${s.wrong_location} wrong location`}
+          {s.wrong_stack > 0 && ` · ${s.wrong_stack} wrong stack`}
           {s.not_hiring > 0 && ` · ${s.not_hiring} not hiring`}
           {s.best_score > 0 && ` · best ${s.best_score}`}
         </p>
@@ -85,7 +86,9 @@ function SourceRow({ s }: { s: Source }) {
 }
 
 export function StatusPanel({ status }: { status: Status }) {
-  const [open, setOpen] = useState(status.level === 'warn' || status.level === 'error')
+  // Expanded by default: this is its own tab now, and you opened it to see
+  // exactly what the collapsed version was hiding.
+  const [open, setOpen] = useState(true)
   const b = BANNER[status.level]
 
   return (

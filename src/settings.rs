@@ -40,6 +40,23 @@ pub struct Settings {
     pub allow_unknown_location: bool,
     #[serde(default)]
     pub seniority: Vec<String>,
+    /// The languages you actually write.
+    ///
+    /// Separate from `keywords` because keywords are a *bonus* — coverage
+    /// across a 38-point content slice — and that is not strong enough to keep
+    /// a Ruby job out. A senior backend role in your city collects 62 points
+    /// for its title, location and level before anyone asks what language it is
+    /// in. This is the gate that asks.
+    #[serde(default)]
+    pub stack: Vec<String>,
+    /// "off" | "prefer" | "require", mirroring `location_policy`.
+    ///
+    /// "prefer" penalises a post that names only languages you don't write,
+    /// which usually drops it under the floor. "require" discards it outright
+    /// and says so on the status panel. A post that names no language at all is
+    /// never judged either way — plenty of real listings don't.
+    #[serde(default = "def_stack_policy")]
+    pub stack_policy: String,
     #[serde(default)]
     pub dealbreakers: Vec<String>,
     #[serde(default)]
@@ -170,6 +187,7 @@ fn def_radar_hours() -> i64 { 24 }
 fn def_outbox_min() -> f64 { 70.0 }
 fn def_mode() -> String { "all".into() }
 fn def_location_policy() -> String { "prefer".into() }
+fn def_stack_policy() -> String { "off".into() }
 fn def_lookback_hours() -> i64 { 24 }
 fn def_workday_lookback_days() -> i64 { 7 }
 fn def_max_pages() -> u32 { 5 }
@@ -191,6 +209,8 @@ impl Settings {
             location_policy: def_location_policy(),
             allow_unknown_location: true,
             seniority: c.profile.seniority.clone(),
+            stack: Vec::new(),
+            stack_policy: def_stack_policy(),
             dealbreakers: c.profile.dealbreakers.clone(),
             min_salary: c.profile.min_salary,
 
@@ -267,6 +287,15 @@ impl Settings {
             _ => self.mode = "custom".into(),
         }
 
+        if !matches!(self.stack_policy.as_str(), "off" | "prefer" | "require") {
+            self.stack_policy = def_stack_policy();
+        }
+        // A gate with nothing behind it would discard everything that names a
+        // language, which is not what anyone means by leaving the list empty.
+        if self.stack.is_empty() {
+            self.stack_policy = "off".into();
+        }
+
         if !matches!(self.location_policy.as_str(), "off" | "prefer" | "require") {
             self.location_policy = def_location_policy();
         }
@@ -306,6 +335,7 @@ impl Settings {
             &mut self.locations,
             &mut self.seniority,
             &mut self.dealbreakers,
+            &mut self.stack,
         ] {
             for s in v.iter_mut() {
                 *s = s.trim().to_lowercase();

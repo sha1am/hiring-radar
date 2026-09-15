@@ -63,7 +63,16 @@ export function FilterBar({
   useEffect(() => setQ(filters.q), [filters.q])
 
   const active =
-    filters.q || filters.source || filters.status || filters.tier || filters.min || filters.tags.length
+    filters.q ||
+    filters.source ||
+    filters.status ||
+    filters.tier ||
+    filters.min ||
+    filters.yrsHave ||
+    filters.tags.length ||
+    filters.roles.length ||
+    filters.levels.length ||
+    filters.modes.length
 
   return (
     <div className="space-y-2">
@@ -118,6 +127,19 @@ export function FilterBar({
           value={filters.min}
           onChange={(e) => setFilters({ ...filters, min: e.target.value })}
           placeholder="min"
+          title="Minimum match score"
+          className="w-16 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-xs text-slate-200 placeholder:text-slate-600"
+        />
+
+        {/* Phrased as what you have, not what the job wants — you know your own
+            number, and a listing that states no years passes either way rather
+            than being filtered out for how it was written. */}
+        <input
+          type="number"
+          value={filters.yrsHave}
+          onChange={(e) => setFilters({ ...filters, yrsHave: e.target.value })}
+          placeholder="yrs"
+          title="Your years of experience — hides roles asking for more"
           className="w-16 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-xs text-slate-200 placeholder:text-slate-600"
         />
 
@@ -134,6 +156,54 @@ export function FilterBar({
       <p className="text-xs text-slate-600">
         {active ? `${shown} of ${total}` : `${total}`} in the last {filters.hours}h
       </p>
+    </div>
+  )
+}
+
+/// A row of toggleable chips backed by one multi-select filter key.
+///
+/// Same rule as the tech chips and for the same reason: selections OR together.
+/// Picking "backend" and "sre" means either, because the intersection of two
+/// roles is by definition empty and a filter that can only return nothing is
+/// not a filter.
+export function FacetChips({
+  label,
+  facets,
+  selected,
+  onChange,
+  max = 12,
+}: {
+  label: string
+  facets: Facet[]
+  selected: string[]
+  onChange: (v: string[]) => void
+  max?: number
+}) {
+  if (facets.length === 0) return null
+  const toggle = (v: string) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v])
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-[10px] uppercase tracking-wide text-slate-600">{label}</span>
+      {facets.slice(0, max).map((f) => {
+        const on = selected.includes(f.value)
+        return (
+          <button
+            key={f.value}
+            onClick={() => toggle(f.value)}
+            aria-pressed={on}
+            className={`rounded-full px-2 py-0.5 text-xs ring-1 transition-colors ${
+              on
+                ? 'bg-violet-500/20 text-violet-200 ring-violet-500/40'
+                : 'bg-slate-800/60 text-slate-400 ring-slate-700/60 hover:text-slate-200'
+            }`}
+          >
+            {f.label}
+            {f.count !== null && <span className="ml-1 opacity-60">{f.count}</span>}
+          </button>
+        )
+      })}
     </div>
   )
 }

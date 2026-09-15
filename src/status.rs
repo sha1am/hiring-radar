@@ -37,6 +37,7 @@ pub struct SourceStatus {
     pub not_hiring: usize,
     pub below_floor: usize,
     pub wrong_location: usize,
+    pub wrong_stack: usize,
 
     // --- cumulative ---
     pub total_fetched: u64,
@@ -61,6 +62,7 @@ impl SourceStatus {
                 self.wrong_location += 1;
                 self.total_wrong_location += 1;
             }
+            Outcome::WrongStack => self.wrong_stack += 1,
             Outcome::BelowFloor { score } => {
                 self.below_floor += 1;
                 self.total_below_floor += 1;
@@ -78,6 +80,7 @@ impl SourceStatus {
         self.not_hiring = 0;
         self.below_floor = 0;
         self.wrong_location = 0;
+        self.wrong_stack = 0;
         self.notes.clear();
         self.last_error = None;
     }
@@ -99,6 +102,10 @@ pub enum Outcome {
     /// separately because otherwise turning on "only India" looks identical to
     /// the profile suddenly matching nothing.
     WrongLocation,
+    /// Discarded by the stack filter. Counted separately for the same reason as
+    /// location: "only Go jobs" switched on must not look like the profile
+    /// suddenly matching nothing.
+    WrongStack,
 }
 
 #[derive(Clone, Debug, Default)]

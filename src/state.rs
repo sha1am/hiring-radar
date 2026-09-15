@@ -13,6 +13,9 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     pub http: reqwest::Client,
     pub drafter: Arc<dyn Drafter>,
+    /// Reads structured facts out of a posting. A no-op unless a model is
+    /// configured — the heuristics at ingest are what make the filters work.
+    pub enricher: Arc<dyn crate::enrich::Enricher>,
     /// Fires a tick to connected dashboards (via SSE) whenever the queue changes.
     pub events: broadcast::Sender<()>,
     /// Live, user-editable configuration. Held behind an RwLock around an Arc so

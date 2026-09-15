@@ -138,6 +138,17 @@ pub struct CardDto {
     pub draft_subject: Option<String>,
     pub draft_body: Option<String>,
     pub excerpt: String,
+
+    // ---- structured facts ----
+    pub role: Option<String>,
+    pub level: Option<String>,
+    /// "5+ yrs" / "3–5 yrs", rendered here so two surfaces can't format it
+    /// differently.
+    pub years: Option<String>,
+    pub work_mode: Option<String>,
+    pub employment: Option<String>,
+    /// False while the model still has this row queued.
+    pub enriched: bool,
 }
 
 impl CardDto {
@@ -171,6 +182,12 @@ impl CardDto {
             draft_subject: c.draft_subject.clone(),
             draft_body: c.draft_body.clone(),
             excerpt: excerpt(&c.body, 400),
+            years: c.facts().years_label(),
+            role: c.role.clone(),
+            level: c.level.clone(),
+            work_mode: c.work_mode.clone(),
+            employment: c.employment.clone(),
+            enriched: c.enriched_at.is_some(),
         }
     }
 }
@@ -216,6 +233,15 @@ pub struct RadarPage {
     pub sources: Vec<Facet>,
     pub statuses: Vec<Facet>,
     pub tags: Vec<Facet>,
+    /// Structured facets, from what is actually on the board. Offering a
+    /// "staff" chip when nothing is staff-level is a filter that can only
+    /// disappoint.
+    pub roles: Vec<Facet>,
+    pub levels: Vec<Facet>,
+    pub work_modes: Vec<Facet>,
+    /// How many rows the model hasn't read yet — the facts get sharper as this
+    /// drains, and a board that silently changes under you deserves a caption.
+    pub pending_enrichment: i64,
 }
 
 #[derive(Serialize, Debug)]
@@ -233,6 +259,7 @@ pub struct SourceDto {
     pub stored: usize,
     pub below_floor: usize,
     pub wrong_location: usize,
+    pub wrong_stack: usize,
     pub not_hiring: usize,
     pub total_fetched: u64,
     pub total_stored: u64,
@@ -489,6 +516,17 @@ fn window_hours(q: &HashMap<String, String>, live: &Settings) -> i64 {
 
 fn filter_from(q: &HashMap<String, String>) -> db::RadarFilter {
     let get = |k: &str| q.get(k).map(|s| s.trim().to_string()).unwrap_or_default();
+    // Multi-select facts arrive as one comma string, the same shape as tags.
+    let list = |k: &str| -> Vec<String> {
+        get(k)
+            .split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let num = |k: &str| get(k).parse::<i64>().ok().filter(|n| (0..=40).contains(n));
+
     db::RadarFilter {
         q: get("q"),
         source: get("source"),
@@ -501,6 +539,13 @@ fn filter_from(q: &HashMap<String, String>) -> db::RadarFilter {
             .filter(|t| !t.is_empty())
             .map(str::to_string)
             .collect(),
+        roles: list("roles"),
+        levels: list("levels"),
+        work_modes: list("modes"),
+        // "I have N years" -> show me anything asking for at most N.
+        years_max_wanted: num("yrs_have"),
+        // "at least N years of seniority" -> anything whose ceiling reaches N.
+        years_min_wanted: num("yrs_min"),
     }
 }
 
@@ -553,7 +598,31 @@ async fn radar_page(st: &AppState, hours: i64, q: &HashMap<String, String>) -> R
                 count: Some(count),
             })
             .collect(),
+        roles: fact_facets(st, "role", window).await,
+        levels: fact_facets(st, "level", window).await,
+        work_modes: fact_facets(st, "work_mode", window).await,
+        // Only meaningful when something is actually going to read them. With
+        // no model configured these rows stay NULL forever, and a caption
+        // promising they'll sharpen would be a lie that never resolves.
+        pending_enrichment: if st.enricher.is_llm() {
+            db::unenriched_count(&st.pool).await.unwrap_or(0)
+        } else {
+            0
+        },
     }
+}
+
+async fn fact_facets(st: &AppState, column: &str, window: i64) -> Vec<Facet> {
+    db::fact_facets(&st.pool, column, window)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(v, count)| Facet {
+            label: v.clone(),
+            value: v,
+            count: Some(count),
+        })
+        .collect()
 }
 
 async fn outbox_page(st: &AppState, live: &Settings) -> OutboxPage {
@@ -610,6 +679,7 @@ async fn status_dto(st: &AppState, hours: i64) -> StatusDto {
                 stored: s.stored,
                 below_floor: s.below_floor,
                 wrong_location: s.wrong_location,
+                wrong_stack: s.wrong_stack,
                 not_hiring: s.not_hiring,
                 total_fetched: s.total_fetched,
                 total_stored: s.total_stored,
@@ -680,7 +750,48 @@ mod tests {
             notified_at: None,
             match_terms: Some("go, kafka".into()),
             tags: Some(",Go,Kafka,".into()),
+            role: Some("backend".into()),
+            level: Some("senior".into()),
+            years_min: Some(5),
+            years_max: None,
+            work_mode: Some("hybrid".into()),
+            employment: Some("full-time".into()),
+            enriched_at: None,
         }
+    }
+
+    #[test]
+    fn the_year_range_is_formatted_server_side() {
+        // Two surfaces formatting "5+ yrs" differently is exactly the drift the
+        // DTO exists to prevent.
+        assert_eq!(CardDto::from(&candidate()).years.as_deref(), Some("5+ yrs"));
+    }
+
+    #[test]
+    fn a_card_says_whether_the_model_has_read_it_yet() {
+        // The facts sharpen as the queue drains; a board that changes under you
+        // deserves to say so.
+        assert!(!CardDto::from(&candidate()).enriched);
+        let mut c = candidate();
+        c.enriched_at = Some(1);
+        assert!(CardDto::from(&c).enriched);
+    }
+
+    #[test]
+    fn fact_filters_parse_as_lowercase_multi_select() {
+        let q = HashMap::from([
+            ("roles".to_string(), "Backend, SRE".to_string()),
+            ("yrs_have".to_string(), "5".to_string()),
+        ]);
+        let f = filter_from(&q);
+        assert_eq!(f.roles, vec!["backend", "sre"]);
+        assert_eq!(f.years_max_wanted, Some(5));
+    }
+
+    #[test]
+    fn a_nonsense_year_filter_is_ignored_rather_than_emptying_the_board() {
+        let q = HashMap::from([("yrs_have".to_string(), "banana".to_string())]);
+        assert_eq!(filter_from(&q).years_max_wanted, None);
     }
 
     #[test]

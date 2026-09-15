@@ -78,6 +78,8 @@ export function Card({
         </span>
       </div>
 
+      <FactLine card={card} className="mt-2" />
+
       {card.tags.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {card.tags.map((t) => (
@@ -181,6 +183,26 @@ export function Card({
   )
 }
 
+/// The one-line summary of what a posting *is* — role, level, years, where.
+/// Only what the posting actually stated; a missing piece is left out rather
+/// than guessed at.
+function FactLine({ card, className = '' }: { card: CardT; className?: string }) {
+  const bits = [card.role, card.level, card.years, card.work_mode, card.employment].filter(Boolean)
+  if (bits.length === 0) return null
+  return (
+    <span className={`flex flex-wrap gap-1 ${className}`}>
+      {bits.map((b) => (
+        <span
+          key={b}
+          className="rounded bg-violet-500/10 px-1 text-[10px] text-violet-300/90 ring-1 ring-violet-500/20"
+        >
+          {b}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 /// The compact row used for the radar list — everything crawled, not just what
 /// fired. Deliberately not a Card: a hundred of those is a wall, and the radar
 /// is for scanning.
@@ -207,6 +229,7 @@ export function RadarRow({ card }: { card: CardT }) {
             {card.location && ` · ${card.location}`} · {card.source_label} · {card.age}
             {card.status !== 'queued' && ` · ${card.status}`}
           </span>
+          <FactLine card={card} className="mt-0.5" />
           {card.tags.length > 0 && (
             <span className="mt-0.5 flex flex-wrap gap-1">
               {card.tags.slice(0, 5).map((t) => (

@@ -34,6 +34,10 @@ export function toQuery(f: Filters): string {
   if (f.tier) p.set('tier', f.tier)
   if (f.min) p.set('min', f.min)
   if (f.tags.length) p.set('tags', f.tags.join(','))
+  if (f.roles.length) p.set('roles', f.roles.join(','))
+  if (f.levels.length) p.set('levels', f.levels.join(','))
+  if (f.modes.length) p.set('modes', f.modes.join(','))
+  if (f.yrsHave) p.set('yrs_have', f.yrsHave)
   return p.toString()
 }
 

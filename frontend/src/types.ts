@@ -26,6 +26,16 @@ export interface Card {
   draft_subject: string | null
   draft_body: string | null
   excerpt: string
+
+  // structured facts (see src/enrich.rs)
+  role: string | null
+  level: string | null
+  /** "5+ yrs" / "3–5 yrs", formatted server-side. */
+  years: string | null
+  work_mode: string | null
+  employment: string | null
+  /** False while the model still has this row queued. */
+  enriched: boolean
 }
 
 export interface Facet {
@@ -42,6 +52,10 @@ export interface RadarPage {
   sources: Facet[]
   statuses: Facet[]
   tags: Facet[]
+  roles: Facet[]
+  levels: Facet[]
+  work_modes: Facet[]
+  pending_enrichment: number
 }
 
 export interface Note {
@@ -63,6 +77,7 @@ export interface Source {
   stored: number
   below_floor: number
   wrong_location: number
+  wrong_stack: number
   not_hiring: number
   total_fetched: number
   total_stored: number
@@ -108,6 +123,8 @@ export interface Settings {
   location_policy: 'off' | 'prefer' | 'require'
   allow_unknown_location: boolean
   seniority: string[]
+  stack: string[]
+  stack_policy: 'off' | 'prefer' | 'require'
   dealbreakers: string[]
   min_salary: number | null
 
@@ -160,6 +177,11 @@ export interface Filters {
   tier: string
   min: string
   tags: string[]
+  roles: string[]
+  levels: string[]
+  modes: string[]
+  /** "I have N years" — show anything asking for at most N. */
+  yrsHave: string
 }
 
 export const emptyFilters = (hours: number): Filters => ({
@@ -170,4 +192,8 @@ export const emptyFilters = (hours: number): Filters => ({
   tier: '',
   min: '',
   tags: [],
+  roles: [],
+  levels: [],
+  modes: [],
+  yrsHave: '',
 })
