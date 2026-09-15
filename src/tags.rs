@@ -37,6 +37,10 @@ const TECH: &[(&str, &str)] = &[
     ("node.js", "Node"),
     ("nodejs", "Node"),
     ("django", "Django"),
+    // Go's web frameworks, which are also the clearest signal a posting that
+    // never writes the word "Golang" is a Go job.
+    ("gin", "Gin"),
+    ("gorm", "GORM"),
     ("fastapi", "FastAPI"),
     ("flask", "Flask"),
     ("spring boot", "Spring"),

@@ -34,6 +34,8 @@ export interface Card {
   score: number
   priority: number
   tier: string
+  /** Names something on the instant list — shown and released on sight. */
+  instant: boolean
   status: string
   posted_at: number | null
   detected_at: number
@@ -164,6 +166,7 @@ export interface Settings {
   seniority: string[]
   stack: string[]
   stack_policy: 'off' | 'prefer' | 'require'
+  instant_stack: string[]
   dealbreakers: string[]
   min_salary: number | null
 

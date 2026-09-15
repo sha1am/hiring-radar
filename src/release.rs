@@ -54,7 +54,10 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
         if remaining <= 0 {
             break;
         }
-        let is_exceptional = cand.tier == "exceptional";
+        // Exceptional passes the bar by definition; so does anything naming a
+        // technology from the instant list, which is what putting one there
+        // means — you asked for these by name, not by score.
+        let is_exceptional = cand.tier == "exceptional" || cand.instant;
 
         // Adaptive gate (exceptional always passes). Recomputed each time round
         // because `remaining` is what it reads: a pass that sends three in a row

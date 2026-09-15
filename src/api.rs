@@ -151,6 +151,9 @@ pub struct CardDto {
     /// The stored column is the value at insert time and decays for nobody.
     pub priority: f64,
     pub tier: String,
+    /// Names something on your instant list, so it was shown and released the
+    /// moment it was found.
+    pub instant: bool,
     pub status: String,
     pub posted_at: Option<i64>,
     pub detected_at: i64,
@@ -204,6 +207,7 @@ impl CardDto {
             score: round1(c.score),
             priority: round1(c.live_priority()),
             tier: c.tier.clone(),
+            instant: c.instant,
             status: c.status.clone(),
             posted_at: c.posted_at,
             detected_at: c.detected_at,
@@ -831,6 +835,7 @@ mod tests {
             score: 78.349,
             priority: 78.349,
             tier: "strong".into(),
+            instant: false,
             status: "queued".into(),
             detected_at: crate::model::now() - 600,
             posted_at: Some(crate::model::now() - 600),

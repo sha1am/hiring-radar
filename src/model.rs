@@ -146,6 +146,9 @@ pub struct Candidate {
     #[allow(dead_code)]
     pub priority: f64,
     pub tier: String,
+    /// Names something on the instant list — the reason this row skipped the
+    /// floor and the settling window. See `settings::instant_stack`.
+    pub instant: bool,
     pub status: String,
     pub detected_at: i64,
     pub posted_at: Option<i64>,

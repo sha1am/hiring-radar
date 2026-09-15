@@ -103,20 +103,47 @@ pub async fn ingest(
     // dropped — a post we don't want still tells us which terms are common.
     state.observe_corpus(&tokenize(&post.haystack())).await;
 
-    // 4. Tier — below the floor is dropped entirely (never stored).
-    let Some(tier) = Tier::from_score(score, &live) else {
-        return Ok(Outcome::BelowFloor { score });
+    // 4. Is this one of the things you asked to be interrupted for?
+    //
+    //    "Tell me about every Go job" is not the same request as "show me the
+    //    best jobs", and the scoring machinery answers the second. A Go role at
+    //    a company you have never heard of, pitched two levels above you, is
+    //    still a Go role you wanted to see — so the instant list is checked
+    //    against the technologies named in the posting and, when it hits, the
+    //    posting skips the floor and the settling window entirely.
+    let watched = live.instant_stack.iter().find(|w| {
+        facts
+            .stack
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(w.trim()))
+    });
+
+    // 5. Tier — below the floor is dropped entirely (never stored), unless it
+    //    is something you are watching for, in which case the floor is the
+    //    wrong instrument: it measures fit, and you asked by name.
+    let tier = match (Tier::from_score(score, &live), watched) {
+        (Some(t), _) => t,
+        (None, Some(_)) => Tier::Marginal,
+        (None, None) => return Ok(Outcome::BelowFloor { score }),
     };
 
     let detected = now();
     let prio = priority(score, post.posted_at, detected, detected);
-    let settle_until = detected + tier.settle_secs(&live);
+    // Settling exists to release the best of a batch rather than the first of
+    // it. For a watched technology there is nothing to choose between.
+    let settle_until = if watched.is_some() {
+        detected
+    } else {
+        detected + tier.settle_secs(&live)
+    };
     let expires_at = detected + live.candidate_ttl_secs;
 
     // 5. Draft-ahead for anything that could fire, so the draft is ready on arrival.
     //    Backfill can't fire, so drafting it would be wasted work (and, with the
     //    ollama drafter, a very slow first crawl).
-    let (draft_subject, draft_body) = if !backfill && matches!(tier, Tier::Exceptional | Tier::Strong) {
+    let (draft_subject, draft_body) = if !backfill
+        && (watched.is_some() || matches!(tier, Tier::Exceptional | Tier::Strong))
+    {
         let (s, b) = state
             .drafter
             .draft(&post, &live, &state.cfg.profile.name, &state.cfg.profile.email)
@@ -168,6 +195,7 @@ pub async fn ingest(
         apply_target: post.apply.target(),
         draft_subject,
         draft_body,
+        instant: watched.is_some(),
     };
     let status = if backfill { "backfilled" } else { "scored" };
     db::insert_candidate(&state.pool, &nc, status).await?;
@@ -175,6 +203,9 @@ pub async fn ingest(
     if backfill {
         tracing::debug!(tier = tier.as_str(), score, company = %post.company,
             "backfilled: {}", post.title);
+    } else if let Some(w) = watched {
+        tracing::info!(tier = tier.as_str(), score, company = %post.company, watching = %w,
+            "scored (instant): {}", post.title);
     } else {
         tracing::info!(tier = tier.as_str(), score, company = %post.company,
             "scored: {}", post.title);
@@ -230,10 +261,18 @@ pub async fn rescore_all(state: &AppState) -> anyhow::Result<usize> {
             .map(|t| t.as_str().to_string())
             .unwrap_or_else(|| "marginal".to_string());
 
+        // The instant list is re-read here too: adding "rust" to it should
+        // light up the Rust roles already on the board, not only the next ones
+        // to arrive.
+        let instant = live
+            .instant_stack
+            .iter()
+            .any(|w| facts.stack.iter().any(|t| t.eq_ignore_ascii_case(w.trim())));
+
         if (a.score - c.score).abs() > 0.05 || c.verdict != a.verdict {
             changed += 1;
         }
-        db::set_assessment(&state.pool, c.id, &a, &tier).await?;
+        db::set_assessment(&state.pool, c.id, &a, &tier, instant).await?;
     }
 
     tracing::info!(rows = rows.len(), changed, "board re-scored against the profile");

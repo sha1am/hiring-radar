@@ -111,6 +111,11 @@ const MIGRATIONS: &[&str] = &[
     // thing standing between a wrong SMTP password and the same post being
     // retried on every tick until it expires.
     "ALTER TABLE candidates ADD COLUMN send_failures INTEGER NOT NULL DEFAULT 0",
+    // Named in `instant_stack` — see settings. Kept on the row rather than
+    // recomputed because it is the reason this posting bypassed the floor and
+    // the settling window, and a row should carry the reason it was treated the
+    // way it was.
+    "ALTER TABLE candidates ADD COLUMN instant INTEGER NOT NULL DEFAULT 0",
 ];
 
 pub async fn connect(url: &str) -> anyhow::Result<SqlitePool> {
@@ -272,6 +277,8 @@ pub struct NewCandidate {
     pub apply_target: Option<String>,
     pub draft_subject: Option<String>,
     pub draft_body: Option<String>,
+    /// Names a technology from `instant_stack`.
+    pub instant: bool,
     pub match_terms: Option<String>,
     pub tags: Option<String>,
     /// The heuristic reading, done at ingest so the filters work immediately.
@@ -305,8 +312,8 @@ pub async fn insert_candidate(
           detected_at, posted_at, expires_at, settle_until, apply_kind, apply_target,
           draft_subject, draft_body, match_terms, tags,
           role, level, years_min, years_max, work_mode, employment, region,
-          verdict, reason, missing, dimensions)
-         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?)
+          verdict, reason, missing, dimensions, instant)
+         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?)
          ON CONFLICT(urn) DO NOTHING",
     )
     .bind(&c.urn)
@@ -341,6 +348,7 @@ pub async fn insert_candidate(
     .bind(&c.reason)
     .bind(&c.missing)
     .bind(&c.dimensions)
+    .bind(c.instant)
     .execute(pool)
     .await?;
     Ok(())
@@ -383,8 +391,11 @@ pub async fn poster_used(pool: &SqlitePool, company: &str) -> anyhow::Result<i64
 /// from the instant path; it only leaves via the hourly digest.
 pub async fn eligible(pool: &SqlitePool) -> anyhow::Result<Vec<Candidate>> {
     let rows = sqlx::query_as::<_, Candidate>(
+        // `instant = 1` is the second way in: a posting naming something on the
+        // watch list is released whatever it scored, because you asked for it
+        // by name rather than by fit.
         "SELECT * FROM candidates
-         WHERE status = 'scored' AND tier != 'marginal'
+         WHERE status = 'scored' AND (tier != 'marginal' OR instant = 1)
            AND settle_until <= ? AND expires_at > ?
          ORDER BY priority DESC",
     )
@@ -837,7 +848,8 @@ pub async fn active(pool: &SqlitePool) -> anyhow::Result<Vec<Candidate>> {
 pub async fn digest_batch(pool: &SqlitePool, limit: i64) -> anyhow::Result<Vec<Candidate>> {
     let rows = sqlx::query_as::<_, Candidate>(
         "SELECT * FROM candidates
-         WHERE status = 'scored' AND tier = 'marginal' AND expires_at > ?
+         WHERE status = 'scored' AND tier = 'marginal' AND instant = 0
+           AND expires_at > ?
          ORDER BY priority DESC LIMIT ?",
     )
     .bind(now())
@@ -1021,10 +1033,12 @@ pub async fn set_assessment(
     id: i64,
     a: &crate::ats::Assessment,
     tier: &str,
+    instant: bool,
 ) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE candidates
-         SET score = ?, tier = ?, verdict = ?, reason = ?, missing = ?, dimensions = ?
+         SET score = ?, tier = ?, verdict = ?, reason = ?, missing = ?, dimensions = ?,
+             instant = ?
          WHERE id = ?",
     )
     .bind(a.score)
@@ -1033,6 +1047,7 @@ pub async fn set_assessment(
     .bind(&a.reason)
     .bind(crate::tags::encode(&a.missing))
     .bind(serde_json::to_string(&a.dimensions).ok())
+    .bind(instant)
     .bind(id)
     .execute(pool)
     .await?;
@@ -1100,6 +1115,11 @@ mod tests {
     }
 
     async fn candidate(pool: &SqlitePool, urn: &str) -> Candidate {
+        insert(pool, urn, "strong", false).await;
+        eligible(pool).await.unwrap().pop().expect("one eligible row")
+    }
+
+    async fn insert(pool: &SqlitePool, urn: &str, tier: &str, instant: bool) {
         let n = NewCandidate {
             urn: urn.into(),
             source: "greenhouse".into(),
@@ -1108,7 +1128,8 @@ mod tests {
             company: "Acme".into(),
             score: 88.0,
             priority: 88.0,
-            tier: "strong".into(),
+            tier: tier.into(),
+            instant,
             detected_at: now(),
             expires_at: now() + 3600,
             settle_until: now() - 1,
@@ -1116,7 +1137,27 @@ mod tests {
             ..Default::default()
         };
         insert_candidate(pool, &n, "scored").await.unwrap();
-        eligible(pool).await.unwrap().pop().expect("one eligible row")
+    }
+
+    #[tokio::test]
+    async fn a_marginal_posting_naming_something_you_watch_for_still_gets_released() {
+        // "Tell me about every Go job" and "show me the best jobs" are
+        // different requests. The tier answers the second; without this, a Go
+        // role that scored badly on level or years would sit in the digest
+        // until tomorrow morning, which is not what "instant" means.
+        let (_serial, pool) = fixture().await;
+        insert(pool, "urn:instant", "marginal", true).await;
+        insert(pool, "urn:quiet", "marginal", false).await;
+
+        let out = eligible(pool).await.unwrap();
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].urn, "urn:instant");
+
+        // And it is not also queued for the hourly digest, which would send it
+        // twice.
+        let digest = digest_batch(pool, 10).await.unwrap();
+        assert_eq!(digest.len(), 1);
+        assert_eq!(digest[0].urn, "urn:quiet");
     }
 
     #[tokio::test]
@@ -1171,7 +1212,7 @@ mod tests {
     #[tokio::test]
     async fn repeated_failures_accumulate_so_the_retry_can_be_given_up_on() {
         let (_serial, pool) = fixture().await;
-        let c = candidate(pool, "urn:3").await;
+        candidate(pool, "urn:3").await;
         for expected in 1..=3 {
             let c = eligible(pool).await.unwrap().pop().unwrap();
             mark_fired(pool, &c).await.unwrap();

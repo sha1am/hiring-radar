@@ -392,6 +392,14 @@ export function SettingsPanel() {
         </Field>
 
         <ListField
+          label="Tell me the moment you see"
+          hint="One technology per line. A posting naming one of these skips the score floor, the settling window and the release bar — it appears on the board and goes out the moment it is found, whatever else it scored. The hourly cap still holds. This is a standing alert, not a filter: it never hides anything."
+          value={s.instant_stack}
+          rows={2}
+          onChange={(v) => set('instant_stack', v)}
+        />
+
+        <ListField
           label="Dealbreakers"
           hint="One per line. Any hit zeroes the post outright — keep these specific."
           value={s.dealbreakers}

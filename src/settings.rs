@@ -65,6 +65,22 @@ pub struct Settings {
     /// never judged either way — plenty of real listings don't.
     #[serde(default = "def_stack_policy")]
     pub stack_policy: String,
+    /// Technologies worth interrupting you for.
+    ///
+    /// A posting naming one of these is shown and released the moment it is
+    /// found: it skips the score floor, so it is never dropped for scoring
+    /// badly on the other dimensions; it skips the settling window, which
+    /// exists to pick the best of a batch and is the wrong trade when the
+    /// answer is "all of them"; and it skips the adaptive bar in the release
+    /// engine. The hourly cap still applies — this changes what is worth an
+    /// interruption, not how many interruptions there are.
+    ///
+    /// Distinct from `stack`, which is a filter over what the board shows. This
+    /// is a standing alert: "tell me about every Go job" is a different request
+    /// from "hide the jobs that aren't Go", and answering the first with the
+    /// second gets you a quiet board and no idea what you missed.
+    #[serde(default = "def_instant_stack")]
+    pub instant_stack: Vec<String>,
     #[serde(default)]
     pub dealbreakers: Vec<String>,
     #[serde(default)]
@@ -205,6 +221,9 @@ fn def_outbox_min() -> f64 { 70.0 }
 fn def_mode() -> String { "all".into() }
 fn def_location_policy() -> String { "prefer".into() }
 fn def_stack_policy() -> String { "off".into() }
+/// Go, because that is the language this radar was built to watch for. Stored
+/// rather than hardcoded, so it is one edit in Settings to change.
+fn def_instant_stack() -> Vec<String> { vec!["go".into()] }
 fn def_lookback_hours() -> i64 { 24 }
 fn def_workday_lookback_days() -> i64 { 7 }
 fn def_max_pages() -> u32 { 5 }
@@ -229,6 +248,7 @@ impl Settings {
             stack: Vec::new(),
             years_experience: None,
             stack_policy: def_stack_policy(),
+            instant_stack: def_instant_stack(),
             dealbreakers: c.profile.dealbreakers.clone(),
             min_salary: c.profile.min_salary,
 
@@ -356,6 +376,7 @@ impl Settings {
             &mut self.seniority,
             &mut self.dealbreakers,
             &mut self.stack,
+            &mut self.instant_stack,
         ] {
             for s in v.iter_mut() {
                 *s = s.trim().to_lowercase();
@@ -405,3 +426,26 @@ impl Settings {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stored_row_from_before_a_field_existed_still_loads() {
+        // Every settings row in every existing install predates every field
+        // added after it. A missing key must take its default, not reset the
+        // rest of someone's configuration.
+        let s: Settings = serde_json::from_str("{}").expect("an empty row is valid");
+        assert_eq!(s.instant_stack, vec!["go".to_string()]);
+        assert_eq!(s.stack_policy, "off");
+    }
+
+    #[test]
+    fn the_instant_list_is_normalised_like_every_other_list() {
+        let mut s: Settings = serde_json::from_str(r#"{"instant_stack":["  Go ","GO","rust",""]}"#)
+            .unwrap();
+        s.sanitize();
+        assert_eq!(s.instant_stack, vec!["go".to_string(), "rust".to_string()]);
+    }
+}

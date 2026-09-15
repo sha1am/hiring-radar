@@ -29,6 +29,21 @@ function stack(card: CardT, max = 4): string | null {
 /// one thing about this system you would want to know immediately.
 const ACTIONED = ['sent', 'applied', 'dismissed', 'notified', 'expired', 'undeliverable']
 
+/// The mark on a row that was shown the instant it appeared.
+///
+/// A dot rather than a word: it is on a minority of rows, it repeats down the
+/// list, and the reason is a sentence — which belongs in a tooltip, not in the
+/// meta line of a hundred rows.
+function InstantDot({ what }: { what: string }) {
+  return (
+    <span
+      aria-label={`on your instant list (${what})`}
+      title={`Names something on your instant list — put on the board and sent the moment it was found, whatever it scored (${what}).`}
+      className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
+    />
+  )
+}
+
 /// One row on the radar.
 ///
 /// Two lines, both of them scannable: the title at full contrast, everything
@@ -74,6 +89,7 @@ export function RadarRow({ card }: { card: CardT }) {
 
         <span className="flex shrink-0 flex-col items-end justify-center gap-1 pl-2">
           <span className="flex items-center gap-1.5">
+            {card.instant && <InstantDot what={stack(card, 2) ?? 'watched'} />}
             {card.verdict && <VerdictBadge verdict={card.verdict} title={card.reason ?? undefined} />}
             <Score value={card.score} tier={rankOf(card)} title={card.reason ?? `${card.tier} match`} />
           </span>
@@ -169,7 +185,10 @@ export function Card({ card, onChanged }: { card: CardT; onChanged: () => void }
 
         <div className="flex shrink-0 flex-col items-end gap-1.5 p-3 pl-2">
           <Score value={card.score} tier={rankOf(card)} title={card.reason ?? `${card.tier} match`} />
-          {card.verdict && <VerdictBadge verdict={card.verdict} />}
+          <span className="flex items-center gap-1.5">
+            {card.instant && <InstantDot what={stack(card, 2) ?? 'watched'} />}
+            {card.verdict && <VerdictBadge verdict={card.verdict} />}
+          </span>
         </div>
       </div>
 
