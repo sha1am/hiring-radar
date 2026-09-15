@@ -129,6 +129,7 @@ impl Status {
             ("greenhouse", s.greenhouse_enabled),
             ("linkedin_guest", s.linkedin_guest_enabled),
             ("linkedin_voyager", s.voyager_enabled),
+            ("workday", s.workday_enabled),
         ] {
             let e = self.entry(name);
             if e.enabled && !on {
@@ -207,19 +208,23 @@ pub fn diagnosis(st: &Status, floor: f64, rows_in_window: i64) -> (Level, String
 
     let failing = st.failing_targets();
     if !failing.is_empty() && st.total_fetched() == 0 {
-        // Only offer the Greenhouse hint when Greenhouse is actually what
-        // failed. Appending it unconditionally sent people to check board
-        // tokens when the real message was about a missing LinkedIn queryId —
-        // a diagnosis panel that points at the wrong subsystem is worse than
-        // one that says nothing.
-        let greenhouse_failing = st
-            .sources
-            .get("greenhouse")
-            .map(|s| s.enabled && s.notes.iter().any(|n| !n.ok))
-            .unwrap_or(false);
-        let hint = if greenhouse_failing {
-            " A wrong Greenhouse board token returns 404 and looks exactly like \
-             an empty board — check the tokens in Settings → Sources."
+        // Only offer a source's hint when that source is actually what failed.
+        // Appending one unconditionally sent people to check board tokens when
+        // the real message was about a missing LinkedIn queryId — a diagnosis
+        // panel that points at the wrong subsystem is worse than one that says
+        // nothing.
+        let failing_source = |name: &str| {
+            st.sources
+                .get(name)
+                .map(|s| s.enabled && s.notes.iter().any(|n| !n.ok))
+                .unwrap_or(false)
+        };
+        let hint = if failing_source("greenhouse") {
+            " A wrong board token returns 404 and looks exactly like an empty \
+             board — check companies/greenhouse.txt."
+        } else if failing_source("workday") {
+            " A 404 there means the tenant or site name is wrong — open the \
+             company's careers page and paste the URL into companies/workday.txt."
         } else {
             ""
         };

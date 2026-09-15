@@ -87,8 +87,21 @@ pub struct Settings {
     pub mode: String,
     #[serde(default)]
     pub greenhouse_enabled: bool,
+    /// Fallback only. `companies/greenhouse.txt` is the authority when it
+    /// exists; this is what an install that predates the file still runs on.
     #[serde(default)]
     pub greenhouse_boards: Vec<String>,
+    #[serde(default)]
+    pub workday_enabled: bool,
+    /// Fallback for `companies/workday.txt`, same rule as the boards above.
+    #[serde(default)]
+    pub workday_sites: Vec<String>,
+    /// How far back a Workday listing can be and still be worth ingesting.
+    ///
+    /// Days rather than hours because these are formal requisitions that sit
+    /// open for weeks, and because Workday only reports age to the day anyway.
+    #[serde(default = "def_workday_lookback_days")]
+    pub workday_lookback_days: i64,
     #[serde(default)]
     pub linkedin_guest_enabled: bool,
     #[serde(default)]
@@ -158,6 +171,7 @@ fn def_outbox_min() -> f64 { 70.0 }
 fn def_mode() -> String { "all".into() }
 fn def_location_policy() -> String { "prefer".into() }
 fn def_lookback_hours() -> i64 { 24 }
+fn def_workday_lookback_days() -> i64 { 7 }
 fn def_max_pages() -> u32 { 5 }
 fn def_poll_pages() -> u32 { 2 }
 fn def_true() -> bool { true }
@@ -199,6 +213,9 @@ impl Settings {
             mode: def_mode(),
             greenhouse_enabled: c.greenhouse.enabled,
             greenhouse_boards: c.greenhouse.boards.clone(),
+            workday_enabled: true,
+            workday_sites: Vec::new(),
+            workday_lookback_days: def_workday_lookback_days(),
             linkedin_guest_enabled: !c.crawl.linkedin_queries.is_empty(),
             linkedin_queries: c
                 .crawl
@@ -231,16 +248,19 @@ impl Settings {
         match self.mode.as_str() {
             "boards" => {
                 self.greenhouse_enabled = true;
+                self.workday_enabled = true;
                 self.linkedin_guest_enabled = false;
                 self.voyager_enabled = false;
             }
             "posts" => {
                 self.greenhouse_enabled = false;
+                self.workday_enabled = false;
                 self.linkedin_guest_enabled = false;
                 self.voyager_enabled = true;
             }
             "all" => {
                 self.greenhouse_enabled = true;
+                self.workday_enabled = true;
                 self.linkedin_guest_enabled = true;
                 self.voyager_enabled = true;
             }
@@ -301,6 +321,15 @@ impl Settings {
         self.greenhouse_boards.retain(|b| !b.is_empty());
         self.greenhouse_boards.sort();
         self.greenhouse_boards.dedup();
+
+        // Not lowercased, unlike board tokens: a Workday site name is
+        // case-sensitive — `NVIDIAExternalCareerSite` 404s as `nvidiaexternal…`.
+        for w in self.workday_sites.iter_mut() {
+            *w = w.trim().to_string();
+        }
+        self.workday_sites.retain(|w| !w.is_empty());
+        self.workday_sites.dedup();
+        self.workday_lookback_days = self.workday_lookback_days.clamp(1, 120);
 
         self.linkedin_queries
             .retain(|q| !q.keywords.trim().is_empty());

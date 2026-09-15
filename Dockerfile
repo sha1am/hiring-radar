@@ -43,11 +43,18 @@ RUN apt-get update \
 
 COPY --from=builder /app/target/release/hiring-radar /usr/local/bin/hiring-radar
 
+# The starter company lists, baked in so a fresh `docker compose up` crawls
+# something. Compose bind-mounts ./companies over this, so editing the files on
+# the host takes effect on the next crawl — no rebuild, no restart. Baking them
+# in as well means the image still works when run without compose.
+COPY companies /app/companies
+
 USER radar
 WORKDIR /app
 
 # config.toml is mounted read-only at runtime; state lives on the /data volume.
 ENV RADAR_CONFIG=/app/config.toml \
+    RADAR_COMPANIES_DIR=/app/companies \
     RADAR_DB=/data/hiring.db \
     RADAR_BIND=0.0.0.0:8080 \
     RUST_LOG=hiring_radar=info,tower_http=warn

@@ -1,0 +1,25 @@
+# Greenhouse board tokens to crawl.
+#
+# One per line. The token is the slug in the board URL:
+#
+#     https://boards.greenhouse.io/ramp   ->   ramp
+#     https://job-boards.greenhouse.io/figma   ->   figma
+#
+# Public JSON, no login, no rate limit worth worrying about — add freely.
+#
+# A wrong token returns a 404 that looks exactly like a company with no
+# openings, so the status panel calls it out by name. If a line shows "HTTP 404 —
+# no such board token", the company either renamed its board or moved off
+# Greenhouse; open the careers page and re-copy the slug.
+#
+# This file wins over anything saved in the settings page — that is why the
+# settings field is read-only. Edit here; the next crawl picks it up, no restart.
+
+# ---- seeds; replace these with companies you actually want ----
+stripe
+gitlab
+airbnb
+
+# Companies with India engineering teams on Greenhouse are worth adding here as
+# you find them — check <company>.com/careers and look for a boards.greenhouse.io
+# or job-boards.greenhouse.io link.

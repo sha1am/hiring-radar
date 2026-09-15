@@ -20,8 +20,8 @@ mod web;
 
 use crate::config::Config;
 use crate::sources::greenhouse::Greenhouse;
-use crate::sources::linkedin_guest::LinkedInGuest;
-use crate::sources::linkedin_voyager::Voyager;
+use crate::sources::linkedin::{LinkedInGuest, Voyager};
+use crate::sources::workday::Workday;
 use crate::sources::JobSource;
 use crate::settings::Settings;
 use crate::state::AppState;
@@ -119,6 +119,10 @@ async fn main() -> anyhow::Result<()> {
             )),
             cfg.crawl.target_search_secs,
         ),
+        // Workday listings are formal requisitions that sit open for weeks, so
+        // this rides the slow tick. Polling it as often as the feed would mean
+        // hundreds of requests an hour to learn nothing new.
+        (Box::new(Workday::new(http.clone())), cfg.crawl.broad_search_secs),
     ];
 
     // ---- spawn a crawl loop per source ----

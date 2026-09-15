@@ -1,0 +1,78 @@
+# Workday careers sites to crawl.
+#
+# Workday is hosted per company, so there is no single API — every employer has
+# its own tenant, shard and site name, and all three are in the URL. Two ways to
+# write one down:
+#
+#     tenant:wdN:SiteName
+#     https://tenant.wdN.myworkdayjobs.com/en-US/SiteName
+#
+# The second is what you can paste straight out of the address bar, so fixing a
+# broken line is a copy rather than a puzzle. Open the company's careers page,
+# click through to the job search, and copy the URL.
+#
+# Site names are CASE-SENSITIVE in the API. `NVIDIAExternalCareerSite` works and
+# `nvidiaexternalcareersite` 404s, even though a browser accepts both.
+#
+# Order matters a little: the crawler works down this file and each tenant gets a
+# page budget, so put the companies you actually want at the top.
+#
+# If a line is wrong you will see it — the status panel names the tenant and the
+# HTTP code rather than showing an empty board. A 404 means the tenant or site is
+# wrong. Watch for shard drift: companies migrate between shards (Qualcomm moved
+# wd5 -> wd12, Walmart wd5 -> wd504) and the old one often keeps serving old
+# listings, so a suddenly-stale tenant is worth re-copying from the browser.
+#
+# Every line below was assembled from indexed job URLs rather than by calling the
+# API — neither this machine nor the container can reach myworkdayjobs.com. They
+# are best-effort: crawl once, then delete whatever the status panel 404s.
+
+# ---- India-specific career sites (these filter to India for you) ----
+svb:wd5:firstcitizensindia                    # First Citizens India (ex-SVB), Bengaluru
+bdx:wd1:EXTERNAL_CAREER_SITE_INDIA            # Becton Dickinson India
+
+# ---- India-origin or India-heavy employers ----
+cyient:wd3:careers                            # Cyient, Hyderabad
+genpact:wd108:External_Careers                # Genpact
+piramalpharma:wd102:PIRAMAL_EXTERNAL_CAREERS  # Piramal Pharma
+sec:wd3:Samsung_Careers                       # Samsung R&D India
+
+# ---- Global tech with large India engineering headcount ----
+nvidia:wd5:NVIDIAExternalCareerSite           # NVIDIA (also hires via jobs.nvidia.com)
+qualcomm:wd12:External                        # Qualcomm — Hyderabad, Bengaluru
+cisco:wd5:Cisco_Careers                       # Cisco — Bengaluru
+adobe:wd5:external_experienced                # Adobe — Noida, Bengaluru
+dell:wd1:External                             # Dell Technologies — Bengaluru, Hyderabad
+salesforce:wd12:External_Career_Site          # Salesforce — Hyderabad, Bengaluru
+intel:wd1:External                            # Intel — Bengaluru
+micron:wd1:External                           # Micron — Hyderabad
+amat:wd1:External                             # Applied Materials — Bengaluru
+hpe:wd5:Jobsathpe                             # HPE — Bengaluru
+autodesk:wd1:Ext                              # Autodesk — Bengaluru
+guidewire:wd5:external                        # Guidewire — Bengaluru
+workday:wd5:Workday                           # Workday — Pune
+expedia:wd5:search                            # Expedia Group — Gurugram
+paypal:wd1:jobs                               # PayPal — Chennai, Bengaluru (unconfirmed shard)
+
+# ---- Retail / commerce ----
+walmart:wd504:WalmartExternal                 # Walmart Global Tech India — current shard
+walmart:wd5:WalmartExternal                   # Walmart — legacy shard, still serving
+target:wd5:targetcareers                      # Target in India — Bengaluru
+
+# ---- Finance, payments, services ----
+visa:wd5:Visa                                 # Visa — Bengaluru
+mastercard:wd1:CorporateCareers               # Mastercard — Pune, Vadodara
+ms:wd5:External                               # Morgan Stanley — Bengaluru, Mumbai
+wf:wd1:WellsFargoJobs                         # Wells Fargo — Hyderabad, Bengaluru
+lseg:wd3:Careers                              # LSEG — Bengaluru
+thomsonreuters:wd5:External_Career_Site       # Thomson Reuters — Bengaluru, Hyderabad
+pwc:wd3:Global_Experienced_Careers            # PwC
+dentsuaegis:wd3:DAN_GLOBAL                    # Dentsu — Bengaluru
+
+# ---- Industrial / other ----
+generalmotors:wd5:Careers_GM                  # GM Tech Centre India — Bengaluru
+philips:wd3:jobs-and-careers                  # Philips — Bengaluru, Pune
+
+# Not on Workday, so don't bother adding them: TCS, Infosys, Wipro, HCLTech,
+# Tech Mahindra, LTIMindtree, Mphasis, Flipkart, Zomato, Swiggy, PhonePe, Paytm,
+# Freshworks, ServiceNow, Western Digital, Intuit, Honeywell, Siemens, Uber.

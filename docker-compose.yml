@@ -19,6 +19,10 @@ services:
     volumes:
       # Your config, read-only. Copy config.example.toml -> config.toml first.
       - ./config.toml:/app/config.toml:ro
+      # Which companies to watch. Read on every crawl, so editing a file here
+      # takes effect within a cycle — no rebuild and no restart. Read-only to
+      # the container: these are yours to edit, not the app's to rewrite.
+      - ./companies:/app/companies:ro
       # SQLite lives here so the queue, the seen-set and the rolling budget all
       # survive `docker compose down`.
       - radar-data:/data

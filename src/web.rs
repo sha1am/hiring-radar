@@ -325,6 +325,7 @@ fn source_label(source: &str) -> &str {
         "greenhouse" => "greenhouse",
         "linkedin_guest" => "li·jobs",
         "linkedin_voyager" => "li·posts",
+        "workday" => "workday",
         other => other,
     }
 }
@@ -880,7 +881,12 @@ struct SettingsForm {
 
     mode: Option<String>,
     greenhouse_enabled: Option<String>,
+    /// Absent whenever companies/greenhouse.txt is in charge — the field is
+    /// rendered disabled, and a disabled field is not submitted.
     greenhouse_boards: Option<String>,
+    workday_enabled: Option<String>,
+    workday_sites: Option<String>,
+    workday_lookback_days: Option<i64>,
     linkedin_guest_enabled: Option<String>,
     linkedin_queries: Option<String>,
     voyager_enabled: Option<String>,
@@ -986,6 +992,13 @@ async fn settings_save(
     if let Some(v) = &f.greenhouse_boards {
         s.greenhouse_boards = parse_list(v);
     }
+    s.workday_enabled = checked(&f.workday_enabled);
+    if let Some(v) = &f.workday_sites {
+        s.workday_sites = parse_list(v);
+    }
+    if let Some(v) = f.workday_lookback_days {
+        s.workday_lookback_days = v;
+    }
     s.linkedin_guest_enabled = checked(&f.linkedin_guest_enabled);
     if let Some(v) = &f.linkedin_queries {
         // One query per line, "keywords | location".
@@ -1061,6 +1074,53 @@ fn ta(name: &str, label: &str, hint: &str, val: &[String], rows: usize) -> Strin
         hint = esc(hint),
         rows = rows,
         val = esc(&val.join("\n"))
+    )
+}
+
+/// A company list, shown but not editable.
+///
+/// The file is the authority (see `sources::common::companies`), so an editable
+/// copy here would be a lie: you would type into it, save, and the next crawl
+/// would read the file and ignore you. Showing the list read-only next to its
+/// path answers both questions a settings page should — what is it watching, and
+/// where do I change that — without pretending to a power it doesn't have.
+///
+/// The `disabled` attribute is load-bearing: a disabled field is not submitted,
+/// so the stored fallback list survives a save untouched.
+fn company_list(kind: &str, label: &str, stored: &[String]) -> String {
+    let list = crate::sources::common::companies::load(kind);
+    let entries = crate::sources::common::companies::resolve(&list, stored);
+    let body = if entries.is_empty() {
+        format!("# nothing here yet — add one per line to {}", list.path.display())
+    } else {
+        entries.join("\n")
+    };
+    let source = if list.missing {
+        format!(
+            "No {} yet — using the {} saved here. Create the file and it takes over.",
+            list.path.display(),
+            if stored.is_empty() { "empty list" } else { "list" }
+        )
+    } else if let Some(e) = &list.error {
+        format!("{} could not be read — {e}", list.path.display())
+    } else {
+        format!(
+            "Read from {} on every crawl. Edit the file; no restart, no save.",
+            list.path.display()
+        )
+    };
+
+    format!(
+        r##"<label class="block">
+  <span class="block text-sm text-slate-300">{label} <span class="ml-1 text-xs font-normal text-slate-500">read-only</span></span>
+  <span class="block text-xs text-slate-500 mb-1">{source}</span>
+  <textarea rows="{rows}" disabled
+    class="w-full rounded-md bg-slate-900/30 border border-slate-800 px-3 py-2 text-sm font-mono text-slate-400 cursor-not-allowed">{body}</textarea>
+</label>"##,
+        label = esc(label),
+        source = esc(&source),
+        rows = entries.len().clamp(3, 10),
+        body = esc(&body)
     )
 }
 
@@ -1279,6 +1339,11 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
       {mode}
       {gh_on}
       {gh_boards}
+      {wd_on}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+        {wd_sites}
+        {wd_days}
+      </div>
       {li_on}
       {li_queries}
       {voy_on}
@@ -1290,6 +1355,7 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
         {voy_poll}
       </div>
       <p class="text-xs text-slate-500">The first crawl walks back far enough to fill the window; every crawl after that only reads the newest page or two, because new posts are on page one and repeating the deep walk every 90 seconds is how accounts get banned.</p>
+      <p class="text-xs text-slate-500">Which companies to watch lives in <code>companies/*.txt</code>, not here &mdash; one per line, re-read on every crawl. That way adding thirty companies is a paste, and <code>git log</code> tells you when a name appeared.</p>
       <p class="text-xs text-slate-500">Your <code>li_at</code> cookie stays in <code>.env</code> &mdash; secrets don't belong in a web form. The queryId is not a secret, just a constant that breaks whenever LinkedIn ships, so it lives here.</p>
     </section>
 
@@ -1343,7 +1409,10 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
         minsal = numf("min_salary", "Min salary (optional, blank = ignore)", s.min_salary.map(|v| v.to_string()).unwrap_or_default(), "1"),
         mode = mode_picker(s),
         gh_on = check("greenhouse_enabled", "Greenhouse boards", s.greenhouse_enabled),
-        gh_boards = ta("greenhouse_boards", "Board tokens", "One per line — the slug in boards.greenhouse.io/<token>. A wrong token is a silent 404.", &s.greenhouse_boards, 4),
+        gh_boards = company_list("greenhouse", "Board tokens", &s.greenhouse_boards),
+        wd_on = check("workday_enabled", "Workday careers sites", s.workday_enabled),
+        wd_sites = company_list("workday", "Workday tenants", &s.workday_sites),
+        wd_days = numf("workday_lookback_days", "Ignore listings older than (d)", s.workday_lookback_days.to_string(), "1"),
         li_on = check("linkedin_guest_enabled", "LinkedIn guest jobs", s.linkedin_guest_enabled),
         li_queries = ta("linkedin_queries", "LinkedIn queries", "One per line: keywords | location", &queries, 3),
         voy_on = check("voyager_enabled", "LinkedIn feed posts — authenticated, fragile, ban risk", s.voyager_enabled),
@@ -1371,6 +1440,27 @@ fn settings_shell(s: &Settings, note: Option<Result<&str, &str>>, derived: &[Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A read-only list must be *inert*, not merely styled as read-only.
+    ///
+    /// If it ever gains a `name`, the browser submits it and the form handler
+    /// overwrites the stored fallback with whatever the page happened to render
+    /// — which, since the file wins, is a silent round-trip that looks like it
+    /// saved and changes nothing.
+    #[test]
+    fn a_company_list_is_shown_but_never_submitted() {
+        let html = company_list("greenhouse", "Board tokens", &["fallback".to_string()]);
+        assert!(html.contains("disabled"), "{html}");
+        assert!(!html.contains("name=\""), "a disabled-looking field with a name still posts: {html}");
+        assert!(html.contains("read-only"), "the page must say so, not just behave so");
+    }
+
+    /// The settings page has to name the file, or "read-only" is just a wall.
+    #[test]
+    fn a_company_list_says_where_to_edit_it() {
+        let html = company_list("workday", "Workday tenants", &[]);
+        assert!(html.contains("workday.txt"), "{html}");
+    }
 
     fn page_with(resume: &str) -> String {
         let mut s: Settings = serde_json::from_str("{}").expect("all fields default");
