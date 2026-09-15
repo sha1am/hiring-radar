@@ -137,6 +137,28 @@ async fn main() -> anyhow::Result<()> {
         state.status.write().await.apply_settings(&live);
     }
 
+    // Bring the board onto the current scorer.
+    //
+    // Scores are stored, not computed on read, which is right — the number on
+    // the card has to be the number the release engine acted on. The cost is
+    // that changing how scoring works leaves a board full of numbers from the
+    // old one, indistinguishable from the new and not comparable to them. A
+    // deploy is exactly when that happens, so a deploy is when to fix it.
+    // Rows you have already acted on are left alone; they are history.
+    {
+        let st = state.clone();
+        tokio::spawn(async move {
+            match pipeline::rescore_all(&st).await {
+                Ok(n) if n > 0 => {
+                    tracing::info!(changed = n, "board re-scored on start-up");
+                    st.notify_ui();
+                }
+                Err(e) => tracing::warn!(%e, "start-up re-score failed"),
+                _ => {}
+            }
+        });
+    }
+
     // Rows that predate the region column, or whose location was worked out
     // after they were stored. Cheap, idempotent, and it means the region filter
     // is populated the first time you open it rather than only for new posts.
