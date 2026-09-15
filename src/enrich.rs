@@ -284,6 +284,17 @@ pub fn role_matches(hay: &str, role: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// How many times a role's vocabulary appears. Used to rank the disciplines a
+/// resume demonstrates: "does the word appear" cannot tell one mention in a
+/// project title from nine bullet points of the same work.
+pub fn role_evidence(hay: &str, role: &str) -> usize {
+    ROLE_RULES
+        .iter()
+        .find(|(r, _)| *r == role)
+        .map(|(_, words)| words.iter().map(|w| hay.matches(w).count()).sum())
+        .unwrap_or(0)
+}
+
 pub fn level_matches(hay: &str, level: &str) -> bool {
     LEVEL_RULES
         .iter()

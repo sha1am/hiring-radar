@@ -74,27 +74,26 @@ impl Profile {
     /// resume uses about itself.
     pub fn from_resume(text: &str, stated_years: Option<i64>) -> Profile {
         let hay = text.to_lowercase();
-
-        let mut roles: Vec<String> = Vec::new();
-        for (role, _) in crate::enrich::role_rules() {
-            if crate::enrich::role_matches(&hay, role) && !roles.contains(&role.to_string()) {
-                roles.push(role.to_string());
-            }
-        }
-
-        // The highest level the resume claims. A resume that says "Senior
-        // Engineer" once and "Engineer" five times is a senior engineer's
-        // resume.
-        let level = crate::enrich::LEVELS
-            .iter()
-            .rev()
-            .find(|l| crate::enrich::level_matches(&hay, l))
-            .map(|l| (*l).to_string());
+        // Roles and level are read from the work, not from the word lists. A
+        // resume is two documents in one: a record of what you did, and an
+        // index of every word you want a keyword search to hit. Reading the
+        // whole thing turned one line — "Frontend: React, HTML5, CSS3" — into a
+        // claim to be a frontend engineer, and turned "St. Michael's Sr. Sec.
+        // School" into a claim to be senior. Both were scoring real postings.
+        let work = work_section(&hay);
 
         Profile {
-            years: stated_years.or_else(|| crate::enrich::years(&hay).0),
-            level,
-            roles,
+            // Told beats read; read beats guessed. Dates in the experience
+            // section are the most reliable thing on a resume — every one of
+            // them was written to be checked.
+            years: stated_years
+                .or_else(|| years_from_dates(&work))
+                .or_else(|| crate::enrich::years(&work).0),
+            level: level_from(&work, stated_years.or_else(|| years_from_dates(&work))),
+            roles: roles_from(&work),
+            // Stack, though, comes from the whole document: the skills list is
+            // exactly where a resume names its technologies, and it is the one
+            // section that means what it says.
             stack: crate::tags::extract(&hay),
         }
     }
@@ -116,6 +115,231 @@ impl Profile {
 
     fn has(&self, tech: &str) -> bool {
         self.stack.iter().any(|t| t.eq_ignore_ascii_case(tech))
+    }
+}
+
+// ===================== reading a resume =====================
+
+/// Headings whose section is a record of work.
+const WORK_HEADINGS: &[&str] = &[
+    "experience", "work experience", "professional experience", "employment",
+    "employment history", "career history", "projects", "personal projects",
+    "side projects", "summary", "profile", "objective", "about", "about me",
+];
+
+/// Headings whose section is a list of words. Everything under one of these is
+/// a claim about vocabulary, not about what you have built — and for a school
+/// name or a skills index, reading it as experience is actively wrong.
+const WORDLIST_HEADINGS: &[&str] = &[
+    "skills", "technical skills", "core skills", "key skills", "technologies",
+    "tech stack", "education", "certifications", "certification", "courses",
+    "coursework", "achievements", "awards", "honors", "honours", "interests",
+    "hobbies", "publications", "activities", "references", "languages",
+];
+
+/// `Some(true)` for a heading that opens a section about work, `Some(false)`
+/// for one that opens a list, `None` for an ordinary line.
+fn heading_kind(line: &str) -> Option<bool> {
+    let t = line
+        .trim()
+        .trim_end_matches(':')
+        .trim()
+        .to_lowercase();
+    if t.is_empty() || t.len() > 32 {
+        return None;
+    }
+    if WORK_HEADINGS.contains(&t.as_str()) {
+        return Some(true);
+    }
+    if WORDLIST_HEADINGS.contains(&t.as_str()) {
+        return Some(false);
+    }
+    None
+}
+
+/// The part of a resume that describes work.
+///
+/// Everything up to the first recognised heading is kept — that is the name and
+/// contact block, plus the summary people write before any heading at all — and
+/// after that each section is kept or dropped by its heading. A resume with no
+/// headings we recognise is returned whole: half a document is worse than a
+/// noisy one.
+fn work_section(resume: &str) -> String {
+    let mut keep = true;
+    let mut saw_heading = false;
+    let mut out = String::new();
+    for line in resume.lines() {
+        if let Some(is_work) = heading_kind(line) {
+            keep = is_work;
+            saw_heading = true;
+            continue;
+        }
+        if keep {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if saw_heading {
+        out
+    } else {
+        resume.to_string()
+    }
+}
+
+const MONTHS: &[&str] = &[
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+];
+
+/// Months since year zero, for arithmetic that doesn't care about days.
+fn month_index(year: i64, month: i64) -> i64 {
+    year * 12 + month
+}
+
+fn today_index() -> i64 {
+    use chrono::Datelike;
+    // chrono is built without its clock feature here, so the current time comes
+    // from the same `now()` everything else in the app uses.
+    chrono::DateTime::from_timestamp(crate::model::now(), 0)
+        .map(|d| month_index(d.year() as i64, d.month() as i64))
+        .unwrap_or_else(|| month_index(1970, 1))
+}
+
+/// Every "March 2024"-shaped date on one line, in order, plus whether the line
+/// says the work is still going on.
+fn dates_on(line: &str) -> (Vec<i64>, bool) {
+    let mut out = Vec::new();
+    let words: Vec<&str> = line.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+    for (i, w) in words.iter().enumerate() {
+        let lw = w.to_lowercase();
+        let Some(m) = MONTHS.iter().position(|m| lw.starts_with(m)) else {
+            continue;
+        };
+        // The year is the next token, or the one after it — enough slack for
+        // "March, 2024" without reaching into the next sentence.
+        for y in words.iter().skip(i + 1).take(2) {
+            if y.len() == 4 {
+                if let Ok(year) = y.parse::<i64>() {
+                    if (1980..=2100).contains(&year) {
+                        out.push(month_index(year, m as i64 + 1));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let l = line.to_lowercase();
+    let ongoing = ["present", "current", "now", "till date", "to date"]
+        .iter()
+        .any(|w| l.contains(w));
+    (out, ongoing)
+}
+
+/// Total professional experience, from the date ranges in the work section.
+///
+/// This exists because the number matters more than anything else in the
+/// assessment and a resume almost never states it: it states the dates and
+/// expects you to subtract. Ranges are merged before they are summed, so a
+/// project running alongside a job is not counted twice, and gaps between jobs
+/// are not counted at all.
+///
+/// Reading only the work section is load-bearing rather than tidy: a degree is
+/// four years of dates sitting right underneath the jobs, and counting it would
+/// have added four years of professional experience to every new graduate.
+fn years_from_dates(work: &str) -> Option<i64> {
+    let today = today_index();
+    let mut spans: Vec<(i64, i64)> = Vec::new();
+
+    for line in work.lines() {
+        let (dates, ongoing) = dates_on(line);
+        let span = match (dates.first(), dates.last(), ongoing) {
+            (Some(&a), Some(&b), _) if b > a => (a, b),
+            (Some(&a), _, true) => (a, today),
+            _ => continue,
+        };
+        // A range longer than fifteen years is a misparse, not a career.
+        if span.1 - span.0 <= 15 * 12 && span.1 <= today + 1 {
+            spans.push(span);
+        }
+    }
+    if spans.is_empty() {
+        return None;
+    }
+
+    spans.sort();
+    let mut months = 0i64;
+    let mut cur = spans[0];
+    for s in spans.into_iter().skip(1) {
+        if s.0 <= cur.1 {
+            cur.1 = cur.1.max(s.1);
+        } else {
+            months += cur.1 - cur.0;
+            cur = s;
+        }
+    }
+    months += cur.1 - cur.0;
+
+    let years = (months as f64 / 12.0).round() as i64;
+    (years > 0).then_some(years)
+}
+
+/// The disciplines a resume actually demonstrates, strongest first.
+///
+/// Ranked by how often a role's vocabulary appears rather than whether it
+/// appears at all. One mention of "full-stack" in a project title is not the
+/// same claim as backend work described in nine bullet points, and treating
+/// them as equal is what let a single word in a skills list decide how a
+/// hundred postings scored. Anything under a third of the strongest role's
+/// evidence is dropped, and at most three survive.
+fn roles_from(work: &str) -> Vec<String> {
+    let mut scored: Vec<(String, usize)> = crate::enrich::role_rules()
+        .iter()
+        .map(|(role, _)| ((*role).to_string(), crate::enrich::role_evidence(work, role)))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let top = scored.first().map(|(_, n)| *n).unwrap_or(0);
+    let floor = (top / 3).max(1);
+    scored
+        .into_iter()
+        .filter(|(_, n)| *n >= floor)
+        .take(3)
+        .map(|(r, _)| r)
+        .collect()
+}
+
+/// Where you sit on the ladder.
+///
+/// Years first, because the ladder is mostly a function of them and because a
+/// resume's own words are unreliable in both directions — it may never say
+/// "senior", or it may say it about a school. A level claimed in the work
+/// section can only raise the answer, never lower it: someone with three years
+/// who is already a tech lead is a tech lead, but nobody is junior because the
+/// word appears in a sentence about mentoring juniors.
+fn level_from(work: &str, years: Option<i64>) -> Option<String> {
+    let from_years = years.map(|y| match y {
+        y if y <= 1 => "junior",
+        2..=4 => "mid",
+        5..=7 => "senior",
+        8..=11 => "staff",
+        _ => "principal",
+    });
+    let claimed = crate::enrich::LEVELS
+        .iter()
+        .rev()
+        .find(|l| crate::enrich::level_matches(work, l))
+        .copied();
+
+    match (from_years, claimed) {
+        (Some(y), Some(c)) => {
+            let higher = match (ladder(y), ladder(c)) {
+                (Some(a), Some(b)) if b > a => c,
+                _ => y,
+            };
+            Some(higher.to_string())
+        }
+        (Some(y), None) => Some(y.to_string()),
+        (None, c) => c.map(|c| c.to_string()),
     }
 }
 
@@ -438,11 +662,15 @@ fn role_fit(p: &Profile, f: &Facts, met: &mut Vec<String>, missing: &mut Vec<Str
     }
 
     // Best match across everything you have done — a backend engineer who has
-    // also done data work should not be marked down on a data posting.
+    // also done data work should not be marked down on a data posting. But the
+    // roles are ranked by evidence, and a secondary discipline is a weaker
+    // claim than a primary one: one full-stack project should not make a
+    // frontend posting score as though frontend were your job.
     let fit = p
         .roles
         .iter()
-        .map(|r| role_affinity(r, want))
+        .enumerate()
+        .map(|(i, r)| role_affinity(r, want) * if i == 0 { 1.0 } else { 0.85 })
         .fold(0.0_f64, f64::max);
 
     if fit >= 0.9 {
@@ -947,6 +1175,104 @@ mod tests {
         assert!(p.roles.contains(&"backend".to_string()), "{:?}", p.roles);
         assert!(p.has("Go") && p.has("Kafka"));
         assert_eq!(p.years, Some(6));
+    }
+
+    /// The shape of a real resume, with the parts that used to mislead the
+    /// reader: a skills index naming a discipline nobody works in, a school
+    /// abbreviated to "Sr.", and a degree's four years of dates sitting a line
+    /// below the jobs.
+    const RESUME: &str = "\
+Software Development Engineer, Trademo Technologies Inc.   November 2025 - June 2026
+  - Implemented RBAC-based ACL access control in the UMS for dependent services in Golang.
+  - Enhanced the screening engine using Golang, Gin, Kubernetes, Kafka, PostgreSQL and Elasticsearch.
+  - Refactored backend screening logic using the Strategy Pattern and singleton handlers.
+Software Development Engineer, ParkPlus   November 2024 - November 2025
+  - Expanded the Notification Service through APIs, Kafka consumers and real-time delivery tracking.
+  - Engineered and refactored modules in the support service using a Golang rule engine.
+  - Streamlined backend reporting workflows using Go, Kafka, MySQL, Redis, Docker and Kubernetes.
+Python Developer, Viveja IT Services   June 2023 - August 2024
+  - Created a monitoring dashboard using Python, Django, DRF and PostgreSQL.
+  - Engineered 3 backend workflows: ingestion pipelines, dashboard APIs and scheduled jobs.
+
+Projects
+ByteVault: Full-Stack File Management Application   React | Golang/Gin | Docker
+  - Created a secure full-stack file management platform with JWT authentication.
+
+Technical Skills
+Languages: Go, Python, SQL      Frontend: React, React Query, HTML5, CSS3, Responsive Design
+Backend: Django, REST APIs, Microservices, Kafka     Databases: MySQL, PostgreSQL, MongoDB
+DevOps & Cloud: Docker, Kubernetes, AWS, CI/CD       Tools: Linux, Git, Postman, Pandas, NumPy
+
+Education
+The NorthCap University, B.Tech. in Computer Science Engineering   Aug 2019 - Jun 2023
+St. Michael's Sr. Sec. School (CBSE), Class XII: 93%   Class X: 10.0 CGPA   2017 - 2019
+";
+
+    #[test]
+    fn experience_is_the_dates_in_the_jobs_not_the_dates_on_the_degree() {
+        // Three jobs: 14 + 12 + 7 months, with a gap that is not counted.
+        // The degree's four years sit one heading below and must not be.
+        let p = Profile::from_resume(RESUME, None);
+        assert_eq!(p.years, Some(3), "{p:?}");
+    }
+
+    #[test]
+    fn a_skills_index_is_not_a_claim_to_have_done_the_work() {
+        // "Frontend: React, HTML5, CSS3" is a line in a word list. Reading it
+        // as experience made every frontend posting score as though frontend
+        // were his discipline.
+        let p = Profile::from_resume(RESUME, None);
+        assert_eq!(p.roles.first().map(String::as_str), Some("backend"), "{:?}", p.roles);
+        assert!(!p.roles.contains(&"frontend".into()), "{:?}", p.roles);
+    }
+
+    #[test]
+    fn a_school_named_sr_does_not_make_you_senior() {
+        // "St. Michael's Sr. Sec. School" matched the senior rule, and being
+        // read as senior is worth 15 points on every senior posting and costs
+        // you the ones pitched at your actual level.
+        let p = Profile::from_resume(RESUME, None);
+        assert_eq!(p.level.as_deref(), Some("mid"), "{p:?}");
+    }
+
+    #[test]
+    fn the_stack_still_comes_from_the_whole_document() {
+        // The skills list is dropped for roles and level, and kept for stack:
+        // it is the one section that means exactly what it says.
+        let p = Profile::from_resume(RESUME, None);
+        for tech in ["Go", "Kafka", "Postgres", "Kubernetes", "Redis", "Docker", "MongoDB"] {
+            assert!(p.has(tech), "missing {tech} in {:?}", p.stack);
+        }
+    }
+
+    #[test]
+    fn a_frontend_posting_does_not_ride_on_one_full_stack_project() {
+        let p = Profile::from_resume(RESUME, None);
+        let a = assess(
+            &p,
+            &facts("frontend", "mid", 3, &["React", "TypeScript", "CSS"]),
+            &post("Frontend Engineer", "React, TypeScript.", "Bengaluru, India"),
+            &settings(),
+        );
+        assert!(a.score < 55.0, "{a:?}");
+        assert!(matches!(a.verdict.as_deref(), Some("reach") | Some("skip")), "{a:?}");
+    }
+
+    #[test]
+    fn the_job_he_is_actually_looking_for_scores_like_it() {
+        let p = Profile::from_resume(RESUME, None);
+        let a = assess(
+            &p,
+            &facts("backend", "mid", 3, &["Go", "Kafka", "Postgres", "Kubernetes"]),
+            &post(
+                "Backend Engineer (Go)",
+                "Go, Kafka, Postgres, Kubernetes. 3+ years.",
+                "Gurugram, India",
+            ),
+            &settings(),
+        );
+        assert!(a.score >= 90.0, "{a:?}");
+        assert_eq!(a.verdict.as_deref(), Some("apply"));
     }
 
     #[test]
