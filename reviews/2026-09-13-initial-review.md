@@ -13,33 +13,30 @@ committed.
 | 1 | Freshness half-life never ran; stored `priority` == `score` for every row | fixed | `09fa0ff` |
 | 2 | `linkedin_guest` could never reach the tier that fires | fixed | `dea9184` |
 | 3 | `per_poster_cap > 1` unreachable | fixed | `09fa0ff` |
-| 4 | Fired ≠ delivered — a failed send still burns a budget slot | **open** | — |
-| 5 | Adaptive bar is wall-clock; the budget is rolling | **open** | — |
+| 4 | Fired ≠ delivered — a failed send still burns a budget slot | fixed | `3b23fdb` |
+| 5 | Adaptive bar is wall-clock; the budget is rolling | fixed | `3b23fdb` |
 | 6 | `/candidate/:id/draft` unreachable; DM/external edits lost | fixed | `82d736a` |
 | 7 | Substring matching over the full body misfires both ways | fixed | `dea9184` |
 | 8 | SQLite without WAL, five writers | fixed | `82d736a` |
 | 9 | `detect_salary` read any 6-digit number as pay | fixed | `dea9184` |
 
-## Still open
+## Fixed in pass 3
 
-**4. Fired ≠ delivered — a broken SMTP config burns the whole budget silently.**
-`mark_fired` writes the notification row (which *is* the budget) before dispatch,
-and both `push_ntfy` and `email_self` failures are only `tracing::warn!`. With
-`SMTP_PASSWORD` unset (`Config::load` merely warns), 4 candidates/hour are marked
-notified with nothing delivered, and UNIQUE(candidate_id) means they can never
-re-fire.
+**4. Fired ≠ delivered.** The claim still comes first — it is what makes two
+concurrent ticks safe — but dispatch now reports which channels worked, and a
+send that delivered nothing calls `unfire`: the notification row is deleted, the
+candidate goes back to 'scored' for the next tick to retry, and the failure is
+counted. Three failures park it as 'undeliverable', which shows on the
+dashboard, because a wrong SMTP password is not transient. The notifications
+table records what was delivered ('pending' → 'ntfy' / 'email' / 'ntfy+email')
+rather than what was attempted. Separately, an ntfy POST answered 403 and a POST
+to an empty topic are both errors now instead of silent successes.
 
-Confirmed live during pass 2 testing: with ntfy pointed at a dead port and no SMTP
-password, a post still logged `FIRED` and consumed a slot. The fix is to treat a
-slot as spent only when at least one channel succeeded, and to roll back the
-notification row when every channel fails.
-
-**5. Adaptive bar is wall-clock; the budget is rolling.**
-`adaptive_bar` interpolates on `now() % 3600` (minutes past the top of the UTC
-hour) while `budget_used` counts a trailing 60 minutes. The config comment
-("required score at :00 with all 4 slots free") implies budget-awareness that does
-not exist — the function never reads `remaining`. Drive it off
-`remaining / per_hour_cap`.
+**5. Adaptive bar.** Now a function of `remaining / per_hour_cap` and nothing
+else: strict on the last slot, relaxed when the budget is untouched, recomputed
+inside the release loop so a pass that fires three raises its own bar. The
+settings labels were renamed with it — "Bar at :00" described behaviour that no
+longer exists.
 
 ## Minor — remaining
 
