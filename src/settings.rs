@@ -109,6 +109,11 @@ pub struct Settings {
     #[serde(default)]
     pub greenhouse_boards: Vec<String>,
     #[serde(default)]
+    pub lever_enabled: bool,
+    /// Fallback for `companies/lever.txt`, same rule as the boards above.
+    #[serde(default)]
+    pub lever_boards: Vec<String>,
+    #[serde(default)]
     pub workday_enabled: bool,
     /// Fallback for `companies/workday.txt`, same rule as the boards above.
     #[serde(default)]
@@ -233,6 +238,8 @@ impl Settings {
             mode: def_mode(),
             greenhouse_enabled: c.greenhouse.enabled,
             greenhouse_boards: c.greenhouse.boards.clone(),
+            lever_enabled: true,
+            lever_boards: Vec::new(),
             workday_enabled: true,
             workday_sites: Vec::new(),
             workday_lookback_days: def_workday_lookback_days(),
@@ -351,6 +358,12 @@ impl Settings {
         self.greenhouse_boards.retain(|b| !b.is_empty());
         self.greenhouse_boards.sort();
         self.greenhouse_boards.dedup();
+
+        for b in self.lever_boards.iter_mut() {
+            *b = b.trim().to_lowercase();
+        }
+        self.lever_boards.retain(|b| !b.is_empty());
+        self.lever_boards.dedup();
 
         // Not lowercased, unlike board tokens: a Workday site name is
         // case-sensitive — `NVIDIAExternalCareerSite` 404s as `nvidiaexternal…`.

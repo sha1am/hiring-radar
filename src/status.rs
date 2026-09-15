@@ -139,6 +139,7 @@ impl Status {
             ("greenhouse", s.greenhouse_enabled),
             ("linkedin_guest", s.linkedin_guest_enabled),
             ("linkedin_voyager", s.voyager_enabled),
+            ("lever", s.lever_enabled),
             ("workday", s.workday_enabled),
         ] {
             let e = self.entry(name);

@@ -1,0 +1,17 @@
+# Lever job boards to crawl.
+#
+# One slug per line — the part after the last slash in jobs.lever.co/<slug>.
+# Public JSON, no login, no rate limit worth worrying about.
+#
+# A wrong slug returns a 404 that looks exactly like a company with no openings,
+# so the status panel calls it out by name. Check one before adding it:
+#
+#   curl -s "https://api.lever.co/v0/postings/<slug>?mode=json" | head -c 200
+#
+# This file wins over anything saved in the settings page — that is why the
+# settings field is read-only. Edit here; the next crawl picks it up.
+
+cred                             # CRED — verified, 12 open roles
+
+# Lever is common among Indian startups, so this is the first place to check
+# when you add a company that isn't on Greenhouse.

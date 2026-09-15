@@ -105,6 +105,7 @@ pub fn source_label(source: &str) -> &str {
         "greenhouse" => "greenhouse",
         "linkedin_guest" => "li\u{b7}jobs",
         "linkedin_voyager" => "li\u{b7}posts",
+        "lever" => "lever",
         "workday" => "workday",
         other => other,
     }

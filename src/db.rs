@@ -395,6 +395,64 @@ pub struct RadarFilter {
     /// would be filtering on how the description was written.
     pub years_max_wanted: Option<i64>,
     pub years_min_wanted: Option<i64>,
+
+    pub sort: Sort,
+}
+
+/// How the radar list is ordered.
+///
+/// Two questions, and they want opposite orderings. "What just landed" is a
+/// feed — you read it newest first and stop when you reach what you saw last
+/// time. "What is worth my afternoon" is a ranking, and the best match from six
+/// hours ago beats a fresh mediocre one. Defaulting to either and offering no
+/// choice makes the other question unanswerable.
+///
+/// Every variant orders entirely in SQL, so what you see is the true top N of
+/// the whole window rather than the window's first N re-sorted. Sorting a
+/// LIMITed page in the client looks identical and is quietly wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sort {
+    /// Most recently posted first.
+    #[default]
+    Newest,
+    /// Oldest first — for working back through a backlog without losing
+    /// your place as new things arrive at the other end.
+    Oldest,
+    /// Highest match score first.
+    Score,
+}
+
+impl Sort {
+    pub fn parse(s: &str) -> Sort {
+        match s.trim().to_lowercase().as_str() {
+            "oldest" => Sort::Oldest,
+            "score" => Sort::Score,
+            _ => Sort::Newest,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Sort::Newest => "newest",
+            Sort::Oldest => "oldest",
+            Sort::Score => "score",
+        }
+    }
+
+    /// The ORDER BY clause. Not user input — this is a fixed string chosen by a
+    /// closed enum, which is why interpolating it is safe.
+    ///
+    /// Every ordering ends in `id` so it is total. Without that, rows with the
+    /// same score (or the same timestamp, which is common — a board publishes a
+    /// dozen listings in the same second) come back in whatever order SQLite
+    /// felt like, and shuffle between refreshes under someone's cursor.
+    fn clause(&self) -> &'static str {
+        match self {
+            Sort::Newest => "COALESCE(posted_at, detected_at) DESC, id DESC",
+            Sort::Oldest => "COALESCE(posted_at, detected_at) ASC, id ASC",
+            Sort::Score => "score DESC, COALESCE(posted_at, detected_at) DESC, id DESC",
+        }
+    }
 }
 
 impl RadarFilter {
@@ -467,8 +525,9 @@ pub async fn recent_filtered(
               OR lower(COALESCE(match_terms, '')) LIKE ?
            ))
          {tag_clause}{role_clause}{level_clause}{mode_clause}{years_clause}
-         ORDER BY COALESCE(posted_at, detected_at) DESC
-         LIMIT ?"
+         ORDER BY {order}
+         LIMIT ?",
+        order = f.sort.clause()
     );
 
     let mut query = sqlx::query_as::<_, Candidate>(&sql)

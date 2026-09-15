@@ -27,6 +27,15 @@
 # API — neither this machine nor the container can reach myworkdayjobs.com. They
 # are best-effort: crawl once, then delete whatever the status panel 404s.
 
+# ---- from your watchlist ----
+sprinklr:wd1:careers                          # Sprinklr — Gurugram
+goto:wd5:GoToCareers                          # Gojek (GoTo Group, its parent)
+blackrock:wd1:BlackRock_Professional          # BlackRock
+barclays:wd3:External_Career_Site_Barclays    # Barclays
+peopleplus:wd3:SCB_Careers                    # Standard Chartered — tenant is "peopleplus", not the bank's name
+airasia:wd3:Careers                           # AirAsia
+expedia:wd108:search                          # Expedia — newest reqs; wd5 below still serves older ones
+
 # ---- India-specific career sites (these filter to India for you) ----
 svb:wd5:firstcitizensindia                    # First Citizens India (ex-SVB), Bengaluru
 bdx:wd1:EXTERNAL_CAREER_SITE_INDIA            # Becton Dickinson India
@@ -51,7 +60,7 @@ hpe:wd5:Jobsathpe                             # HPE — Bengaluru
 autodesk:wd1:Ext                              # Autodesk — Bengaluru
 guidewire:wd5:external                        # Guidewire — Bengaluru
 workday:wd5:Workday                           # Workday — Pune
-expedia:wd5:search                            # Expedia Group — Gurugram
+expedia:wd5:search                            # Expedia Group — legacy shard, still serving
 paypal:wd1:jobs                               # PayPal — Chennai, Bengaluru (unconfirmed shard)
 
 # ---- Retail / commerce ----
@@ -76,3 +85,4 @@ philips:wd3:jobs-and-careers                  # Philips — Bengaluru, Pune
 # Not on Workday, so don't bother adding them: TCS, Infosys, Wipro, HCLTech,
 # Tech Mahindra, LTIMindtree, Mphasis, Flipkart, Zomato, Swiggy, PhonePe, Paytm,
 # Freshworks, ServiceNow, Western Digital, Intuit, Honeywell, Siemens, Uber.
+# See companies/UNREACHABLE.md for the rest of the watchlist and why.

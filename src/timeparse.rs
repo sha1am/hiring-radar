@@ -42,7 +42,7 @@ pub fn parse_opt(s: Option<&str>) -> Option<i64> {
 /// A post timestamp is only useful if it could actually be a post timestamp.
 /// Reject the future (beyond a little clock skew) and anything older than ~5
 /// years, which in practice means a parse went wrong.
-fn plausible(ts: i64) -> Option<i64> {
+pub fn plausible(ts: i64) -> Option<i64> {
     let n = now();
     if ts > n + 3600 || ts < n - 5 * 365 * 86400 {
         return None;

@@ -22,6 +22,7 @@ mod web;
 
 use crate::config::Config;
 use crate::sources::greenhouse::Greenhouse;
+use crate::sources::lever::Lever;
 use crate::sources::linkedin::{LinkedInGuest, Voyager};
 use crate::sources::workday::Workday;
 use crate::sources::JobSource;
@@ -114,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
     // the dashboard therefore takes effect on its next tick, with no restart.
     let sources: Vec<(Box<dyn JobSource>, u64)> = vec![
         (Box::new(Greenhouse::new(http.clone())), cfg.crawl.broad_search_secs),
+        (Box::new(Lever::new(http.clone())), cfg.crawl.broad_search_secs),
         (Box::new(LinkedInGuest::new(http.clone())), cfg.crawl.target_search_secs),
         (
             Box::new(Voyager::new(

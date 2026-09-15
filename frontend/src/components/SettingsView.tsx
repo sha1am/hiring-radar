@@ -415,6 +415,11 @@ export function SettingsPanel() {
             onChange={(v) => set('greenhouse_enabled', v)}
           />
           <Check
+            label="Lever boards"
+            checked={s.lever_enabled}
+            onChange={(v) => set('lever_enabled', v)}
+          />
+          <Check
             label="Workday careers sites"
             checked={s.workday_enabled}
             onChange={(v) => set('workday_enabled', v)}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Filters } from './types'
+import type { Filters, SortKey } from './types'
 import { emptyFilters } from './types'
 
 /// Live updates, without a polling loop.
@@ -89,6 +89,7 @@ export function useFilters(defaultHours: number): [Filters, (f: Filters) => void
       levels: (p.get('levels') ?? '').split(',').filter(Boolean),
       modes: (p.get('modes') ?? '').split(',').filter(Boolean),
       yrsHave: p.get('yrs_have') ?? '',
+      sort: asSort(p.get('sort')),
     }
   }, [defaultHours])
 
@@ -108,6 +109,7 @@ export function useFilters(defaultHours: number): [Filters, (f: Filters) => void
     if (f.levels.length) p.set('levels', f.levels.join(','))
     if (f.modes.length) p.set('modes', f.modes.join(','))
     if (f.yrsHave) p.set('yrs_have', f.yrsHave)
+    if (f.sort !== 'newest') p.set('sort', f.sort)
     const base = window.location.hash.split('?')[0] || '#/'
     const qs = p.toString()
     // replaceState, not assignment: typing in the search box should not push a
@@ -117,6 +119,10 @@ export function useFilters(defaultHours: number): [Filters, (f: Filters) => void
 
   return [filters, setFilters]
 }
+
+/// A stale bookmark carrying ?sort=priority should show the board, not break.
+const asSort = (v: string | null): SortKey =>
+  v === 'oldest' || v === 'score' ? v : 'newest'
 
 export const clearFilters = (hours: number) => emptyFilters(hours)
 

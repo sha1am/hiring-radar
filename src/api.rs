@@ -239,6 +239,11 @@ pub struct RadarPage {
     pub roles: Vec<Facet>,
     pub levels: Vec<Facet>,
     pub work_modes: Vec<Facet>,
+    /// Echoed back so the client renders the control from what the server
+    /// actually applied, not from what it asked for — a typo'd sort silently
+    /// falling back to newest while the button still reads "score" is the kind
+    /// of disagreement that takes an hour to notice.
+    pub sort: String,
     /// How many rows the model hasn't read yet — the facts get sharper as this
     /// drains, and a board that silently changes under you deserves a caption.
     pub pending_enrichment: i64,
@@ -546,6 +551,7 @@ fn filter_from(q: &HashMap<String, String>) -> db::RadarFilter {
         years_max_wanted: num("yrs_have"),
         // "at least N years of seniority" -> anything whose ceiling reaches N.
         years_min_wanted: num("yrs_min"),
+        sort: db::Sort::parse(&get("sort")),
     }
 }
 
@@ -567,6 +573,7 @@ async fn radar_page(st: &AppState, hours: i64, q: &HashMap<String, String>) -> R
 
     RadarPage {
         items: items.iter().map(CardDto::from).collect(),
+        sort: filter.sort.as_str().to_string(),
         window_hours: hours,
         total_in_window,
         // radar_facets returns the distinct values present in the window, with
@@ -698,6 +705,7 @@ fn settings_dto(live: &Settings) -> SettingsDto {
     use crate::sources::common::companies;
     let lists = [
         ("greenhouse", &live.greenhouse_boards),
+        ("lever", &live.lever_boards),
         ("workday", &live.workday_sites),
     ]
     .into_iter()
@@ -846,6 +854,22 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_sort_falls_back_rather_than_erroring() {
+        // A stale bookmark with ?sort=priority should show the board, not a 400.
+        assert_eq!(db::Sort::parse("priority"), db::Sort::Newest);
+        assert_eq!(db::Sort::parse(""), db::Sort::Newest);
+        assert_eq!(db::Sort::parse("SCORE"), db::Sort::Score);
+        assert_eq!(db::Sort::parse(" oldest "), db::Sort::Oldest);
+    }
+
+    #[test]
+    fn the_sort_round_trips_through_its_own_name() {
+        for s in [db::Sort::Newest, db::Sort::Oldest, db::Sort::Score] {
+            assert_eq!(db::Sort::parse(s.as_str()), s);
+        }
+    }
+
+    #[test]
     fn tag_filters_parse_from_one_comma_string() {
         let q = HashMap::from([("tags".to_string(), "Go, Rust ,".to_string())]);
         assert_eq!(filter_from(&q).tags, vec!["Go", "Rust"]);
@@ -855,7 +879,7 @@ mod tests {
     fn settings_expose_the_company_lists_as_read_only() {
         let live: Settings = serde_json::from_str("{}").unwrap();
         let dto = settings_dto(&live);
-        assert_eq!(dto.company_lists.len(), 2);
+        assert_eq!(dto.company_lists.len(), 3);
         assert!(dto.company_lists.iter().all(|l| l.read_only));
         assert!(dto.company_lists.iter().all(|l| !l.note.is_empty()));
     }

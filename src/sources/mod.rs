@@ -25,6 +25,7 @@
 
 pub mod common;
 pub mod greenhouse;
+pub mod lever;
 pub mod linkedin;
 pub mod workday;
 

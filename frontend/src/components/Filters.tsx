@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react'
-import type { Facet, Filters as F } from '../types'
+import type { Facet, Filters as F, SortKey } from '../types'
 import { emptyFilters } from '../types'
 import { useDebounced } from '../hooks'
+
+/// Two questions that want opposite orderings. "What just landed" is a feed you
+/// read newest-first and stop when you recognise something; "what is worth my
+/// afternoon" is a ranking, where the best match from six hours ago beats a
+/// fresh mediocre one. Offering only one makes the other unanswerable.
+const SORTS: [SortKey, string, string][] = [
+  ['newest', 'newest', 'Most recently posted first'],
+  ['score', 'best match', 'Highest match score first'],
+  ['oldest', 'oldest', 'Oldest first — for working back through a backlog'],
+]
 
 const WINDOWS: [number, string][] = [
   [6, '6h'],
@@ -143,9 +153,29 @@ export function FilterBar({
           className="w-16 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-xs text-slate-200 placeholder:text-slate-600"
         />
 
+        <div className="flex overflow-hidden rounded-md ring-1 ring-slate-700">
+          {SORTS.map(([key, label, title]) => (
+            <button
+              key={key}
+              onClick={() => setFilters({ ...filters, sort: key })}
+              title={title}
+              aria-pressed={filters.sort === key}
+              className={`px-2 py-1 text-xs ${
+                filters.sort === key
+                  ? 'bg-slate-700 text-slate-100'
+                  : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         {active ? (
           <button
-            onClick={() => setFilters(emptyFilters(filters.hours))}
+            // Clears the filters, keeps the window and the ordering: those are
+            // how you're reading the board, not what you're looking for.
+            onClick={() => setFilters({ ...emptyFilters(filters.hours), sort: filters.sort })}
             className="text-xs text-slate-500 hover:text-slate-300"
           >
             clear

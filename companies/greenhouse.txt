@@ -15,11 +15,22 @@
 # This file wins over anything saved in the settings page — that is why the
 # settings field is read-only. Edit here; the next crawl picks it up, no restart.
 
-# ---- seeds; replace these with companies you actually want ----
+# ---- from your watchlist; every token below was verified against the API ----
+razorpaysoftwareprivatelimited   # Razorpay
+towerresearchcapital             # Tower Research Capital
+gravitonresearchcapital          # Graviton Research Capital
+arcesiumllc                      # Arcesium
+
+# Innovaccer: job-boards.greenhouse.io/innovaccer renders ~85 jobs in a browser,
+# but the public board API 404s for every spelling tried (innovaccer,
+# innovaccerinc, innovaccerhq). Their board is not exposed through the API, so
+# there is nothing to crawl — left out rather than left in as a permanent 404.
+
+# ---- general seeds; delete if you don't care about them ----
 stripe
 gitlab
-airbnb
 
-# Companies with India engineering teams on Greenhouse are worth adding here as
-# you find them — check <company>.com/careers and look for a boards.greenhouse.io
-# or job-boards.greenhouse.io link.
+# Adding more: open <company>.com/careers and look for a boards.greenhouse.io or
+# job-boards.greenhouse.io link — the slug after the last / is the token. Check
+# it with:
+#   curl -s https://boards-api.greenhouse.io/v1/boards/<token>/jobs | head -c 200

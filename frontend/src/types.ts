@@ -56,7 +56,11 @@ export interface RadarPage {
   levels: Facet[]
   work_modes: Facet[]
   pending_enrichment: number
+  /** What the server actually sorted by — render the control from this. */
+  sort: SortKey
 }
+
+export type SortKey = 'newest' | 'oldest' | 'score'
 
 export interface Note {
   text: string
@@ -147,6 +151,8 @@ export interface Settings {
   mode: string
   greenhouse_enabled: boolean
   greenhouse_boards: string[]
+  lever_enabled: boolean
+  lever_boards: string[]
   workday_enabled: boolean
   workday_sites: string[]
   workday_lookback_days: number
@@ -182,6 +188,7 @@ export interface Filters {
   modes: string[]
   /** "I have N years" — show anything asking for at most N. */
   yrsHave: string
+  sort: SortKey
 }
 
 export const emptyFilters = (hours: number): Filters => ({
@@ -196,4 +203,6 @@ export const emptyFilters = (hours: number): Filters => ({
   levels: [],
   modes: [],
   yrsHave: '',
+  // A feed by default: "what just landed" is the question you open this with.
+  sort: 'newest',
 })
