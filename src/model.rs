@@ -176,6 +176,9 @@ pub struct Candidate {
     pub years_max: Option<i64>,
     pub work_mode: Option<String>,
     pub employment: Option<String>,
+    /// Coarse geography — see `geo::REGIONS`. NULL when the location could not
+    /// be resolved, which is never the same as "somewhere else".
+    pub region: Option<String>,
     /// NULL until the LLM pass has read this row. Doubles as the work queue.
     pub enriched_at: Option<i64>,
 }

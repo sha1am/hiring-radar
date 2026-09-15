@@ -93,6 +93,10 @@ const MIGRATIONS: &[&str] = &[
     // NULL means the LLM pass has not looked at this row yet. That is the whole
     // work queue — no separate table, and it survives a restart for free.
     "ALTER TABLE candidates ADD COLUMN enriched_at INTEGER",
+    // Coarse geography — india / gulf / sea / europe / … See geo::REGIONS.
+    // NULL means the location could not be resolved, which is its own case and
+    // never means "somewhere else".
+    "ALTER TABLE candidates ADD COLUMN region TEXT",
     "CREATE INDEX IF NOT EXISTS idx_candidates_unenriched ON candidates(enriched_at) WHERE enriched_at IS NULL",
 ];
 
@@ -264,6 +268,7 @@ pub struct NewCandidate {
     pub years_max: Option<i64>,
     pub work_mode: Option<String>,
     pub employment: Option<String>,
+    pub region: Option<String>,
 }
 
 /// `status` is 'scored' for live detections and 'backfilled' for the first
@@ -280,8 +285,8 @@ pub async fn insert_candidate(
          (urn, source, url, title, company, location, body, score, priority, tier, status,
           detected_at, posted_at, expires_at, settle_until, apply_kind, apply_target,
           draft_subject, draft_body, match_terms, tags,
-          role, level, years_min, years_max, work_mode, employment)
-         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?)
+          role, level, years_min, years_max, work_mode, employment, region)
+         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?)
          ON CONFLICT(urn) DO NOTHING",
     )
     .bind(&c.urn)
@@ -311,6 +316,7 @@ pub async fn insert_candidate(
     .bind(c.years_max)
     .bind(&c.work_mode)
     .bind(&c.employment)
+    .bind(&c.region)
     .execute(pool)
     .await?;
     Ok(())
@@ -390,6 +396,7 @@ pub struct RadarFilter {
     pub roles: Vec<String>,
     pub levels: Vec<String>,
     pub work_modes: Vec<String>,
+    pub regions: Vec<String>,
     /// "how much experience are they asking for" as a band you can sit inside.
     /// A listing with no stated years passes both, because filtering it out
     /// would be filtering on how the description was written.
@@ -497,6 +504,7 @@ pub async fn recent_filtered(
     let role_clause = in_clause("role", &f.roles);
     let level_clause = in_clause("level", &f.levels);
     let mode_clause = in_clause("work_mode", &f.work_modes);
+    let region_clause = in_clause("region", &f.regions);
 
     // A listing that states no years passes either bound. Dropping those would
     // be filtering on how the description was written, not on the job.
@@ -524,7 +532,7 @@ pub async fn recent_filtered(
               OR lower(COALESCE(location, '')) LIKE ?
               OR lower(COALESCE(match_terms, '')) LIKE ?
            ))
-         {tag_clause}{role_clause}{level_clause}{mode_clause}{years_clause}
+         {tag_clause}{role_clause}{level_clause}{mode_clause}{region_clause}{years_clause}
          ORDER BY {order}
          LIMIT ?",
         order = f.sort.clause()
@@ -549,7 +557,7 @@ pub async fn recent_filtered(
         query = query.bind(crate::tags::needle(t));
     }
     // Bound in the same order the clauses were appended above.
-    for v in f.roles.iter().chain(&f.levels).chain(&f.work_modes) {
+    for v in f.roles.iter().chain(&f.levels).chain(&f.work_modes).chain(&f.regions) {
         query = query.bind(v.clone());
     }
     if let Some(n) = f.years_max_wanted {
@@ -844,7 +852,7 @@ pub async fn fact_facets(
     column: &str,
     window_secs: i64,
 ) -> anyhow::Result<Vec<(String, i64)>> {
-    const ALLOWED: &[&str] = &["role", "level", "work_mode", "employment"];
+    const ALLOWED: &[&str] = &["role", "level", "work_mode", "employment", "region"];
     if !ALLOWED.contains(&column) {
         anyhow::bail!("not a facetable column: {column}");
     }
@@ -858,4 +866,34 @@ pub async fn fact_facets(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Fill in `region` for rows that predate the column, or whose location was
+/// only worked out later.
+///
+/// Runs once at boot rather than as a SQL migration, because the mapping lives
+/// in the gazetteer and SQLite cannot reach it. Bounded and idempotent: it only
+/// touches rows where region is NULL and a location exists, so a second run
+/// does nothing.
+pub async fn backfill_regions(pool: &SqlitePool) -> anyhow::Result<u64> {
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, COALESCE(location, '') FROM candidates
+         WHERE region IS NULL AND COALESCE(location, '') != ''",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut filled = 0u64;
+    for (id, location) in rows {
+        let Some(region) = crate::geo::region_of(&location) else {
+            continue;
+        };
+        sqlx::query("UPDATE candidates SET region = ? WHERE id = ?")
+            .bind(region)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        filled += 1;
+    }
+    Ok(filled)
 }

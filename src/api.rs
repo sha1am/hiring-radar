@@ -147,6 +147,7 @@ pub struct CardDto {
     pub years: Option<String>,
     pub work_mode: Option<String>,
     pub employment: Option<String>,
+    pub region: Option<String>,
     /// False while the model still has this row queued.
     pub enriched: bool,
 }
@@ -187,6 +188,7 @@ impl CardDto {
             level: c.level.clone(),
             work_mode: c.work_mode.clone(),
             employment: c.employment.clone(),
+            region: c.region.clone(),
             enriched: c.enriched_at.is_some(),
         }
     }
@@ -239,6 +241,10 @@ pub struct RadarPage {
     pub roles: Vec<Facet>,
     pub levels: Vec<Facet>,
     pub work_modes: Vec<Facet>,
+    /// Coarse geography — india, gulf, sea, europe… Only what's on the board:
+    /// a "gulf" chip with nothing behind it is a filter that can only
+    /// disappoint.
+    pub regions: Vec<Facet>,
     /// Echoed back so the client renders the control from what the server
     /// actually applied, not from what it asked for — a typo'd sort silently
     /// falling back to newest while the button still reads "score" is the kind
@@ -547,6 +553,7 @@ fn filter_from(q: &HashMap<String, String>) -> db::RadarFilter {
         roles: list("roles"),
         levels: list("levels"),
         work_modes: list("modes"),
+        regions: list("regions"),
         // "I have N years" -> show me anything asking for at most N.
         years_max_wanted: num("yrs_have"),
         // "at least N years of seniority" -> anything whose ceiling reaches N.
@@ -608,6 +615,7 @@ async fn radar_page(st: &AppState, hours: i64, q: &HashMap<String, String>) -> R
         roles: fact_facets(st, "role", window).await,
         levels: fact_facets(st, "level", window).await,
         work_modes: fact_facets(st, "work_mode", window).await,
+        regions: fact_facets(st, "region", window).await,
         // Only meaningful when something is actually going to read them. With
         // no model configured these rows stay NULL forever, and a caption
         // promising they'll sharpen would be a lie that never resolves.
@@ -764,6 +772,7 @@ mod tests {
             years_max: None,
             work_mode: Some("hybrid".into()),
             employment: Some("full-time".into()),
+            region: Some("india".into()),
             enriched_at: None,
         }
     }
@@ -794,6 +803,14 @@ mod tests {
         let f = filter_from(&q);
         assert_eq!(f.roles, vec!["backend", "sre"]);
         assert_eq!(f.years_max_wanted, Some(5));
+    }
+
+    #[test]
+    fn region_filters_are_multi_select_like_the_rest() {
+        // "India or the Gulf" is the question; the intersection of two regions
+        // is empty by definition.
+        let q = HashMap::from([("regions".to_string(), "India, Gulf".to_string())]);
+        assert_eq!(filter_from(&q).regions, vec!["india", "gulf"]);
     }
 
     #[test]

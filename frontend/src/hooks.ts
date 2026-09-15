@@ -88,6 +88,7 @@ export function useFilters(defaultHours: number): [Filters, (f: Filters) => void
       roles: (p.get('roles') ?? '').split(',').filter(Boolean),
       levels: (p.get('levels') ?? '').split(',').filter(Boolean),
       modes: (p.get('modes') ?? '').split(',').filter(Boolean),
+      regions: (p.get('regions') ?? '').split(',').filter(Boolean),
       yrsHave: p.get('yrs_have') ?? '',
       sort: asSort(p.get('sort')),
     }
@@ -108,6 +109,7 @@ export function useFilters(defaultHours: number): [Filters, (f: Filters) => void
     if (f.roles.length) p.set('roles', f.roles.join(','))
     if (f.levels.length) p.set('levels', f.levels.join(','))
     if (f.modes.length) p.set('modes', f.modes.join(','))
+    if (f.regions.length) p.set('regions', f.regions.join(','))
     if (f.yrsHave) p.set('yrs_have', f.yrsHave)
     if (f.sort !== 'newest') p.set('sort', f.sort)
     const base = window.location.hash.split('?')[0] || '#/'

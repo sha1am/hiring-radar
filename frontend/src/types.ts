@@ -34,6 +34,8 @@ export interface Card {
   years: string | null
   work_mode: string | null
   employment: string | null
+  /** india | gulf | sea | apac | europe | americas | other; null = unresolved. */
+  region: string | null
   /** False while the model still has this row queued. */
   enriched: boolean
 }
@@ -55,6 +57,7 @@ export interface RadarPage {
   roles: Facet[]
   levels: Facet[]
   work_modes: Facet[]
+  regions: Facet[]
   pending_enrichment: number
   /** What the server actually sorted by — render the control from this. */
   sort: SortKey
@@ -186,6 +189,7 @@ export interface Filters {
   roles: string[]
   levels: string[]
   modes: string[]
+  regions: string[]
   /** "I have N years" — show anything asking for at most N. */
   yrsHave: string
   sort: SortKey
@@ -202,6 +206,7 @@ export const emptyFilters = (hours: number): Filters => ({
   roles: [],
   levels: [],
   modes: [],
+  regions: [],
   yrsHave: '',
   // A feed by default: "what just landed" is the question you open this with.
   sort: 'newest',

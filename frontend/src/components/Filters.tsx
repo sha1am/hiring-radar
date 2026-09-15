@@ -80,6 +80,7 @@ export function FilterBar({
     filters.min ||
     filters.yrsHave ||
     filters.tags.length ||
+    filters.regions.length ||
     filters.roles.length ||
     filters.levels.length ||
     filters.modes.length
@@ -202,12 +203,16 @@ export function FacetChips({
   selected,
   onChange,
   max = 12,
+  labelFor,
 }: {
   label: string
   facets: Facet[]
   selected: string[]
   onChange: (v: string[]) => void
   max?: number
+  /// Prettier names for terse stored keys, e.g. sea -> "SE Asia". Falls back to
+  /// the server's label, so a key this map hasn't heard of still renders.
+  labelFor?: Record<string, string>
 }) {
   if (facets.length === 0) return null
   const toggle = (v: string) =>
@@ -229,7 +234,7 @@ export function FacetChips({
                 : 'bg-slate-800/60 text-slate-400 ring-slate-700/60 hover:text-slate-200'
             }`}
           >
-            {f.label}
+            {labelFor?.[f.value] ?? f.label}
             {f.count !== null && <span className="ml-1 opacity-60">{f.count}</span>}
           </button>
         )

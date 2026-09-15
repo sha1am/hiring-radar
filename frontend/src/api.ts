@@ -37,6 +37,7 @@ export function toQuery(f: Filters): string {
   if (f.roles.length) p.set('roles', f.roles.join(','))
   if (f.levels.length) p.set('levels', f.levels.join(','))
   if (f.modes.length) p.set('modes', f.modes.join(','))
+  if (f.regions.length) p.set('regions', f.regions.join(','))
   if (f.yrsHave) p.set('yrs_have', f.yrsHave)
   if (f.sort !== 'newest') p.set('sort', f.sort)
   return p.toString()

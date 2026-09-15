@@ -118,6 +118,15 @@ pub async fn ingest(
         years_max: facts.years_max,
         work_mode: facts.work_mode.clone(),
         employment: facts.employment.clone(),
+        // Deterministic from the gazetteer, not from the model — a region is a
+        // lookup, and asking an LLM to do lookups is how you get Bengaluru
+        // filed under Europe on a bad day.
+        region: post
+            .location
+            .as_deref()
+            .and_then(crate::geo::region_of)
+            .or_else(|| crate::geo::region_of(&post.haystack()))
+            .map(str::to_string),
         apply_kind: post.apply.kind().to_string(),
         apply_target: post.apply.target(),
         draft_subject,

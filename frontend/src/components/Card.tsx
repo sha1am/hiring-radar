@@ -188,6 +188,8 @@ export function Card({
 /// than guessed at.
 function FactLine({ card, className = '' }: { card: CardT; className?: string }) {
   const bits = [card.role, card.level, card.years, card.work_mode, card.employment].filter(Boolean)
+  // The region is on the row already via the location string; showing the
+  // bucket too would be saying "Bengaluru, India" and then "india".
   if (bits.length === 0) return null
   return (
     <span className={`flex flex-wrap gap-1 ${className}`}>

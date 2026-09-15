@@ -91,8 +91,43 @@ const PLACES: &[(&str, &str, &str, bool)] = &[
     ("madrid", "Madrid", "ES", false),
     ("barcelona", "Barcelona", "ES", false),
     ("tel aviv", "Tel Aviv", "IL", false),
+    // --- Gulf ---
+    // The single largest destination for Indian engineers after India itself,
+    // and it had exactly one entry (Dubai) until this list existed. A region
+    // filter that can't see Riyadh or Doha is a region filter in name only.
+    ("abu dhabi", "Abu Dhabi", "AE", false),
     ("dubai", "Dubai", "AE", false),
+    ("sharjah", "Sharjah", "AE", false),
+    ("united arab emirates", "United Arab Emirates", "AE", true),
+    ("uae", "United Arab Emirates", "AE", true),
+    ("riyadh", "Riyadh", "SA", false),
+    ("jeddah", "Jeddah", "SA", false),
+    ("dammam", "Dammam", "SA", false),
+    ("neom", "NEOM", "SA", false),
+    ("saudi arabia", "Saudi Arabia", "SA", true),
+    ("ksa", "Saudi Arabia", "SA", true),
+    ("doha", "Doha", "QA", false),
+    ("qatar", "Qatar", "QA", true),
+    ("kuwait city", "Kuwait City", "KW", false),
+    ("kuwait", "Kuwait", "KW", true),
+    ("manama", "Manama", "BH", false),
+    ("bahrain", "Bahrain", "BH", true),
+    ("muscat", "Muscat", "OM", false),
+    ("oman", "Oman", "OM", true),
+    // --- Southeast Asia ---
     ("singapore", "Singapore", "SG", true),
+    ("kuala lumpur", "Kuala Lumpur", "MY", false),
+    ("penang", "Penang", "MY", false),
+    ("malaysia", "Malaysia", "MY", true),
+    ("jakarta", "Jakarta", "ID", false),
+    ("indonesia", "Indonesia", "ID", true),
+    ("bangkok", "Bangkok", "TH", false),
+    ("thailand", "Thailand", "TH", true),
+    ("ho chi minh", "Ho Chi Minh City", "VN", false),
+    ("hanoi", "Hanoi", "VN", false),
+    ("vietnam", "Vietnam", "VN", true),
+    ("manila", "Manila", "PH", false),
+    ("philippines", "Philippines", "PH", true),
     ("tokyo", "Tokyo", "JP", false),
     ("sydney", "Sydney", "AU", false),
     ("melbourne", "Melbourne", "AU", false),
@@ -116,6 +151,53 @@ const REMOTE_HINTS: &[&str] = &[
     "anywhere",
     "wfh",
 ];
+
+/// Coarse regions, for the "where in the world" filter.
+///
+/// Deliberately coarse and deliberately closed. The question this answers is
+/// the one you actually ask when scanning — India, the Gulf, Singapore, or
+/// somewhere that needs a visa conversation — not "which country". A per-country
+/// filter would be forty chips, most with one row behind them.
+///
+/// A country the gazetteer knows but that isn't in any bucket falls to `other`,
+/// which is honest: it is somewhere, we know where, and it isn't one of the
+/// places you sort by. A place we can't resolve at all gets no region, and the
+/// filter leaves those alone rather than hiding them.
+pub const REGIONS: &[&str] = &["india", "gulf", "sea", "apac", "europe", "americas", "other"];
+
+const REGION_OF: &[(&str, &[&str])] = &[
+    ("india", &["IN"]),
+    // The GCC states. Grouped because they hire on the same terms and you would
+    // consider them as one set, not one at a time.
+    ("gulf", &["AE", "SA", "QA", "KW", "BH", "OM"]),
+    ("sea", &["SG", "MY", "ID", "TH", "VN", "PH"]),
+    ("apac", &["JP", "AU", "NZ", "HK", "CN", "KR", "TW"]),
+    (
+        "europe",
+        &["GB", "IE", "DE", "NL", "FR", "CH", "SE", "NO", "DK", "FI", "PL", "PT", "ES", "IT", "CZ", "RO", "AT", "BE"],
+    ),
+    ("americas", &["US", "CA", "MX", "BR", "AR", "CL"]),
+];
+
+/// Which region a country code belongs to. Never None for a code the gazetteer
+/// produced — unclassified countries land in "other".
+pub fn region(country: &str) -> &'static str {
+    let cc = country.trim().to_uppercase();
+    REGION_OF
+        .iter()
+        .find(|(_, codes)| codes.iter().any(|c| *c == cc))
+        .map(|(name, _)| *name)
+        .unwrap_or("other")
+}
+
+/// The region a piece of text is about, if any place can be resolved from it.
+///
+/// `None` means we could not tell where the job is — which is its own case, not
+/// a miss. Feed posts frequently never name a city, and a region filter that
+/// swallowed those would hide real matches for how the post was written.
+pub fn region_of(text: &str) -> Option<&'static str> {
+    lookup(text).map(|p| region(p.country))
+}
 
 /// A resolved place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,6 +277,56 @@ pub fn describe(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_gulf_is_more_than_dubai() {
+        // It was exactly Dubai before the region filter existed, which made
+        // "show me Gulf jobs" quietly mean "show me Dubai jobs".
+        for city in ["Riyadh", "Doha", "Abu Dhabi", "Manama", "Muscat", "Kuwait City"] {
+            assert_eq!(region_of(city), Some("gulf"), "{city} is not in the Gulf");
+        }
+    }
+
+    #[test]
+    fn regions_cover_the_places_people_actually_consider() {
+        assert_eq!(region_of("Bengaluru, India"), Some("india"));
+        assert_eq!(region_of("Singapore"), Some("sea"));
+        assert_eq!(region_of("Kuala Lumpur"), Some("sea"));
+        assert_eq!(region_of("Berlin, Germany"), Some("europe"));
+        assert_eq!(region_of("London"), Some("europe"));
+        assert_eq!(region_of("Seattle, WA"), Some("americas"));
+        assert_eq!(region_of("Tokyo"), Some("apac"));
+    }
+
+    #[test]
+    fn a_known_country_outside_every_bucket_is_other_not_nothing() {
+        // Tel Aviv is somewhere, we know where, and it is not a bucket you sort
+        // by. "other" is the honest answer; None would mean "we could not tell".
+        assert_eq!(region_of("Tel Aviv"), Some("other"));
+    }
+
+    #[test]
+    fn an_unresolvable_location_has_no_region_at_all() {
+        // A feed post that never names a place must not be filed under a region,
+        // or a region filter hides it for how the post was written.
+        assert_eq!(region_of("fully remote, EMEA timezone"), None);
+        assert_eq!(region_of(""), None);
+    }
+
+    #[test]
+    fn every_region_name_is_one_the_filter_offers() {
+        for (name, _) in REGION_OF {
+            assert!(REGIONS.contains(name), "{name} is produced but not offered");
+        }
+        assert!(REGIONS.contains(&"other"));
+    }
+
+    #[test]
+    fn uae_spellings_all_land_in_the_gulf() {
+        assert_eq!(region_of("UAE"), Some("gulf"));
+        assert_eq!(region_of("United Arab Emirates"), Some("gulf"));
+        assert_eq!(region_of("Dubai, UAE"), Some("gulf"));
+    }
 
     #[test]
     fn finds_indian_cities_in_prose() {

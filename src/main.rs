@@ -109,6 +109,15 @@ async fn main() -> anyhow::Result<()> {
         state.status.write().await.apply_settings(&live);
     }
 
+    // Rows that predate the region column, or whose location was worked out
+    // after they were stored. Cheap, idempotent, and it means the region filter
+    // is populated the first time you open it rather than only for new posts.
+    match db::backfill_regions(&pool).await {
+        Ok(n) if n > 0 => tracing::info!(filled = n, "regions backfilled"),
+        Err(e) => tracing::warn!(%e, "region backfill failed"),
+        _ => {}
+    }
+
     // ---- assemble sources ----
     // Every source gets a loop unconditionally; each one checks the live
     // settings on every pass and no-ops when disabled. Enabling a source from

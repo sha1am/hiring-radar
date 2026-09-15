@@ -7,6 +7,19 @@ import { FacetChips, FilterBar, TagChips } from './components/Filters'
 import { SettingsPanel } from './components/SettingsView'
 import { StatusPanel } from './components/StatusPanel'
 
+/// The stored keys are terse; these are what a person reads. Kept next to the
+/// only place they are rendered rather than on the server, because unlike a
+/// source label nothing else needs to agree about them.
+const REGION_LABEL: Record<string, string> = {
+  india: 'India',
+  gulf: 'Gulf',
+  sea: 'SE Asia',
+  apac: 'APAC',
+  europe: 'Europe',
+  americas: 'Americas',
+  other: 'elsewhere',
+}
+
 const LEVEL_DOT: Record<string, string> = {
   ok: 'bg-emerald-400',
   info: 'bg-sky-400',
@@ -150,6 +163,15 @@ function RadarView({
         total={radar.total_in_window}
       />
       <div className="space-y-1.5">
+        {/* Region first: it is the coarsest cut, and the one you make before
+            you care what the role is. */}
+        <FacetChips
+          label="where"
+          facets={radar.regions}
+          selected={filters.regions}
+          onChange={(v) => setFilters({ ...filters, regions: v })}
+          labelFor={REGION_LABEL}
+        />
         <FacetChips
           label="role"
           facets={radar.roles}
@@ -163,7 +185,7 @@ function RadarView({
           onChange={(v) => setFilters({ ...filters, levels: v })}
         />
         <FacetChips
-          label="where"
+          label="setup"
           facets={radar.work_modes}
           selected={filters.modes}
           onChange={(v) => setFilters({ ...filters, modes: v })}
@@ -183,6 +205,25 @@ function RadarView({
         <Empty>
           Nothing matches those filters in the last {filters.hours}h. Widen the window, or clear the
           filters.
+          {/* The region filter sits downstream of scoring, and scoring is where
+              a location outside your profile quietly loses ten points and falls
+              under the floor. Somewhere you never listed will look like
+              somewhere nobody is hiring — worth saying at the moment it bites,
+              rather than leaving it to be worked out. */}
+          {filters.regions.length > 0 && (
+            <>
+              <br />
+              <span className="text-slate-600">
+                Looking outside the places in your profile? Jobs elsewhere lose the location bonus
+                and often fall under the score floor — add those places, or set location to "off",
+                in{' '}
+                <a href="#/settings" className="underline hover:text-slate-400">
+                  settings
+                </a>
+                .
+              </span>
+            </>
+          )}
         </Empty>
       ) : (
         <ul className="divide-y divide-slate-900">
