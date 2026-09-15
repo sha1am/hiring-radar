@@ -71,33 +71,92 @@ Every threshold in that table is editable in Settings without a rebuild.
 
 ## Matching against your resume
 
-Upload a PDF (or paste the text) in **Settings → Your resume**, and posts are
-scored by how much they look like *your* work rather than against a keyword
-list you have to maintain.
+Upload a PDF (or paste the text) in **Settings → Resume**. It is read once into
+a profile — years, level, discipline, stack — and every posting is scored
+against that profile instead of against a keyword list you maintain by hand.
 
-It's IDF-weighted cosine similarity over unigrams and bigrams, averaged with
-coverage of your resume's most distinctive terms. Bigrams matter more than they
-look — "distributed systems" and "event driven" are what separate one backend
-role from another, and unigrams alone dissolve them into common words. The IDF
-comes from the posts this instance has actually seen, so distinctive phrases
-earn weight and "responsibilities" doesn't, with nobody curating anything. Its
-influence ramps in with corpus size, because on a handful of documents document
-frequencies are noise.
+Reading the resume is the part that is easy to get wrong, because a resume is
+two documents in one: a record of what you did, and an index of words you want a
+search to hit. So the reader separates them. Roles and level come from the
+experience and projects sections only — a line reading `Frontend: React, HTML5,
+CSS3` is a vocabulary claim, not a job, and reading it as one had every frontend
+posting scoring as though frontend were the work. The stack comes from the whole
+document, because the skills list is exactly where a resume names its
+technologies and is the one section that means what it says.
 
-Structural signals — title, location, seniority — stay separate and are never
-expressed through the resume. A resume can't say "senior, in Bengaluru", and
-scoring one with the other is how you end up alerting on a Berlin internship
-that happens to mention Kafka.
+Experience comes from the dates in the jobs, merged so a project running
+alongside a job is not double counted and gaps between jobs are not counted at
+all — and not from the degree four lines below, which would have added four
+years of professional experience to every new graduate. Level follows from the
+years; a level claimed in the work section can only raise it, never lower it.
+("St. Michael's Sr. Sec. School" is not a claim to be senior. It was making
+one.)
 
-A `resume weight` slider blends resume similarity against your keyword list, so
-it's a dial rather than a switch. With no resume loaded, keyword scoring is
-unchanged. Cards and radar rows show which of your resume's terms a post hit —
-the difference between "94" and "94, because it wants exactly the Kafka and
-Kubernetes work you've been doing".
+Disciplines are ranked by evidence rather than by presence. One mention of
+"full-stack" in a project title is not the same claim as backend work described
+across nine bullets, and a secondary discipline counts for less when a posting
+is scored.
 
-It is deliberately not an LLM call: this runs on the instant path for every
-post, and the score you see has to be the one the release engine acted on.
-Nothing about your resume leaves the container.
+Settings shows exactly what was read — years, level, discipline, the technology
+list — because every score on the board is downstream of it, and a profile you
+cannot see is one you cannot correct.
+
+## Scoring: an ATS, pointed the other way
+
+`src/ats.rs` asks what a real applicant tracking system asks — does this person
+meet the requirements, and which ones do they miss — and answers it in the
+direction that is useful to the candidate. Five dimensions, weighted to a
+hundred:
+
+| dimension | weight | the question |
+|-----------|--------|--------------|
+| stack     | 35     | do you write what they need written? |
+| years     | 20     | are you experienced enough? |
+| role      | 20     | is this the kind of engineering you do? |
+| level     | 15     | is it pitched at your level? |
+| location  | 10     | can you take it? |
+
+The weighted sum is then scaled by a relevance factor built from the stack and
+role fits. A flat sum let years, level and location — three things true of you
+wherever you apply — carry a frontend posting to 49 for a backend engineer, and
+nobody is hired for a frontend role because they live in the right city.
+
+Languages count double inside the stack: swapping Postgres for MySQL is a
+Monday, swapping Go for Scala is a quarter. Years are a slope rather than a gate
+— one short is 0.8, two is 0.55 — because "5+ years" has never once meant a
+person with four was turned away. Roles have neighbours: SRE and devops are 0.9
+of each other, backend and frontend 0.2.
+
+Out of it comes a verdict — apply, stretch, reach, skip — which is allowed to
+disagree with the number: a posting can score 91 and still be a stretch because
+you are two years short. Every row can show its working, dimension by dimension,
+with what you meet and what you are missing. Aggregated across the board, the
+missing list answers "what should I learn next", which is a better question than
+"what should I apply to".
+
+No model is involved. The score you see is the one the release engine acted on,
+and you can reproduce it by hand.
+
+Postings from other departments are ruled out before any of this: recruiting,
+sales, clinical, operations and the rest arrive on the same company boards as
+the engineering roles, name no technology and no discipline, and would otherwise
+collect the benefit of the doubt on both and pass on years, level and location
+alone. A title carrying an engineering word as a whole word is engineering
+whatever else it says, which is what keeps "Software Engineer, Sales Platform"
+and drops "Engineering Recruiter".
+
+## Watching for a technology
+
+**Settings → Tell me the moment you see** is a list of technologies — `go` by
+default. A posting naming one of them skips the score floor, skips the settling
+window and skips the release bar: it lands on the board and goes out the moment
+it is found, whatever else it scored. The hourly cap still holds, so this
+changes what is worth an interruption, not how many interruptions there are.
+
+It is a standing alert, not a filter. "Tell me about every Go job" and "hide the
+jobs that are not Go" are different requests — the second is `stack` plus
+`stack policy` — and answering the first with the second gets you a quiet board
+and no idea what you missed. Rows that came in this way carry an amber dot.
 
 ## The outbox
 
@@ -254,8 +313,9 @@ turning the filter on never looks like the profile suddenly matching nothing.
 
 `/settings` edits, live, with no restart:
 
-- **Matching** — titles, keywords, locations, remote-ok, seniority,
-  dealbreakers, min salary, resume + resume weight.
+- **Matching** — resume, years of experience, titles, keywords, locations,
+  remote-ok, seniority, languages you write + stack policy, the instant list,
+  dealbreakers, min salary.
 - **Sources** — Greenhouse board tokens, LinkedIn queries, per-source on/off.
 - **Alert budget** — hourly cap, per-company cap, tier thresholds, settling
   window, rollover TTL, adaptive bar, radar window.
