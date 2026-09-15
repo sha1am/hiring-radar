@@ -29,6 +29,12 @@ pub async fn push_ntfy(
     cfg: &Config,
     c: &Candidate,
 ) -> anyhow::Result<()> {
+    // With no topic the URL is just the server, which happily accepts the POST
+    // and delivers it to nobody. Saying so is the difference between a fixable
+    // configuration error and a push that silently goes nowhere.
+    if cfg.ntfy.topic.trim().is_empty() {
+        bail!("no ntfy topic configured");
+    }
     let url = format!("{}/{}", cfg.ntfy.server.trim_end_matches('/'), cfg.ntfy.topic);
     let dash = format!("{}/", cfg.server.base_url.trim_end_matches('/'));
     let title = ascii(&format!("{} - {}", c.title, c.company));
@@ -51,7 +57,12 @@ pub async fn push_ntfy(
         .body(msg)
         .send()
         .await
-        .context("ntfy push failed")?;
+        .context("ntfy push failed")?
+        // A reachable server that answers 403 is not a delivered notification,
+        // and treating it as one is how a whole hour's budget goes out to a
+        // topic somebody else reserved.
+        .error_for_status()
+        .context("ntfy rejected the push")?;
     Ok(())
 }
 

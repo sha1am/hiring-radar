@@ -1,7 +1,16 @@
-use crate::model::now;
 use crate::{db, notify};
 use crate::state::AppState;
 use std::collections::HashMap;
+
+/// How many times a candidate may be claimed and not delivered before it is
+/// parked as undeliverable.
+///
+/// Three, then it stops. An unreachable ntfy server and a wrong SMTP password
+/// are not transient faults, and a pool that retries them every thirty seconds
+/// until everything expires produces a log of one repeated failure and no
+/// signal. Parking it puts the word "undeliverable" on the dashboard, where it
+/// is a question you can answer.
+const MAX_SEND_ATTEMPTS: i64 = 3;
 
 /// The heart of the system. Detection continuously fills a scored pool; this
 /// function decides *who fires when a slot is free*, under a hard rolling-hour
@@ -27,10 +36,6 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
         return Ok(()); // budget spent; everyone keeps rolling until next hour drains
     }
 
-    // 3. Adaptive bar: strict at the top of the hour, relaxed as it drains, so a
-    //    quiet hour doesn't waste the budget on nothing. Exceptional bypasses it.
-    let bar = adaptive_bar(rel);
-
     // 4. Walk the eligible pool best-first; fire until the budget or the pool runs out.
     //    Ranking is recomputed here, not read from the stored column — see
     //    Candidate::live_priority for why.
@@ -51,8 +56,10 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
         }
         let is_exceptional = cand.tier == "exceptional";
 
-        // Adaptive gate (exceptional always passes).
-        if !is_exceptional && cand.score < bar {
+        // Adaptive gate (exceptional always passes). Recomputed each time round
+        // because `remaining` is what it reads: a pass that sends three in a row
+        // raises its own bar as it goes.
+        if !is_exceptional && cand.score < adaptive_bar(rel, remaining) {
             continue;
         }
 
@@ -81,13 +88,39 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
             continue;
         }
 
-        // Dispatch: push is the ping, email is the record. Failures don't unfire.
-        if let Err(e) = notify::push_ntfy(&state.http, &state.cfg, &cand).await {
-            tracing::warn!(id = cand.id, %e, "ntfy failed");
+        // Dispatch: push is the ping, email is the record.
+        let mut delivered: Vec<&str> = Vec::new();
+        match notify::push_ntfy(&state.http, &state.cfg, &cand).await {
+            Ok(()) => delivered.push("ntfy"),
+            Err(e) => tracing::warn!(id = cand.id, %e, "ntfy failed"),
         }
-        if let Err(e) = notify::email_self(&state.cfg, &cand).await {
-            tracing::warn!(id = cand.id, %e, "self-email failed");
+        match notify::email_self(&state.cfg, &cand).await {
+            Ok(()) => delivered.push("email"),
+            Err(e) => tracing::warn!(id = cand.id, %e, "self-email failed"),
         }
+
+        // Nothing delivered is not a notification. Hand the slot back, or the
+        // budget goes on posts nobody was told about — and because the claim is
+        // unique per candidate, it could never be re-sent afterwards.
+        if delivered.is_empty() {
+            let failures = db::unfire(&state.pool, cand.id).await?;
+            if failures >= MAX_SEND_ATTEMPTS {
+                db::set_status(&state.pool, cand.id, "undeliverable").await?;
+                tracing::error!(
+                    id = cand.id, failures, company = %cand.company,
+                    "giving up after {failures} failed sends — check ntfy and SMTP: {}",
+                    cand.title
+                );
+            } else {
+                tracing::error!(
+                    id = cand.id, failures,
+                    "nothing delivered; slot returned, will retry: {}", cand.title
+                );
+            }
+            continue;
+        }
+
+        db::record_channel(&state.pool, cand.id, &delivered.join("+")).await?;
 
         tracing::info!(
             id = cand.id, tier = %cand.tier, score = cand.score,
@@ -105,15 +138,82 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Linearly relax the required score from `adaptive_start` at :00 to
-/// `adaptive_end` at :59. Disabled => a flat `strong_min` bar.
-fn adaptive_bar(rel: &crate::settings::Settings) -> f64 {
+/// How good a post has to be to spend one of the remaining slots.
+///
+/// This used to interpolate on minutes past the top of the UTC hour, which
+/// measured the wrong thing entirely: the budget is a *rolling* sixty minutes,
+/// so there is no top of the hour to be early in. At :59 with four slots already
+/// spent it relaxed the bar to its most generous — inviting exactly the posts it
+/// had no room for — and at :01 with a completely untouched budget it was at its
+/// strictest, refusing to spend a slot it was about to lose anyway.
+///
+/// What actually decides whether a post is worth a slot is how many slots there
+/// are. The last one is expensive: spend it on something mediocre and the good
+/// post twenty minutes later waits an hour. The fourth of four costs almost
+/// nothing, and refusing to spend it is how a quiet night passes with an empty
+/// inbox and a pool full of decent matches.
+///
+/// So: `adaptive_start` (strict) when the budget is nearly gone, `adaptive_end`
+/// (relaxed) when it is untouched, linear in between. Disabled => flat
+/// `strong_min`.
+fn adaptive_bar(rel: &crate::settings::Settings, remaining: i64) -> f64 {
     if !rel.adaptive_threshold {
         return rel.strong_min;
     }
-    let minute = ((now() % 3600) as f64) / 60.0; // 0..60
-    let frac = (minute / 60.0).clamp(0.0, 1.0);
-    rel.adaptive_start - (rel.adaptive_start - rel.adaptive_end) * frac
+    let cap = rel.per_hour_cap.max(1) as f64;
+    let free = (remaining.max(0) as f64 / cap).clamp(0.0, 1.0);
+    rel.adaptive_start - (rel.adaptive_start - rel.adaptive_end) * free
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::Settings;
+
+    fn rel() -> Settings {
+        let mut s: Settings = serde_json::from_str("{}").unwrap();
+        s.adaptive_threshold = true;
+        s.adaptive_start = 90.0;
+        s.adaptive_end = 70.0;
+        s.per_hour_cap = 4;
+        s
+    }
+
+    #[test]
+    fn the_last_slot_is_the_expensive_one() {
+        let s = rel();
+        // One left of four: nearly strict. All four free: as generous as it gets.
+        assert!(adaptive_bar(&s, 1) > adaptive_bar(&s, 4));
+        assert_eq!(adaptive_bar(&s, 4), s.adaptive_end);
+        assert_eq!(adaptive_bar(&s, 0), s.adaptive_start);
+    }
+
+    #[test]
+    fn the_bar_does_not_move_with_the_wall_clock() {
+        // The budget is a rolling hour. The old version read the UTC minute,
+        // which meant the bar swung between its extremes on a schedule that had
+        // nothing to do with how much budget was left.
+        let s = rel();
+        let a = adaptive_bar(&s, 2);
+        let b = adaptive_bar(&s, 2);
+        assert_eq!(a, b);
+        assert!((a - 80.0).abs() < 1e-9, "half the budget should be half way: {a}");
+    }
+
+    #[test]
+    fn switching_it_off_gives_a_flat_bar() {
+        let mut s = rel();
+        s.adaptive_threshold = false;
+        assert_eq!(adaptive_bar(&s, 0), s.strong_min);
+        assert_eq!(adaptive_bar(&s, 4), s.strong_min);
+    }
+
+    #[test]
+    fn a_cap_of_zero_does_not_divide_by_zero() {
+        let mut s = rel();
+        s.per_hour_cap = 0;
+        assert!(adaptive_bar(&s, 0).is_finite());
+    }
 }
 
 /// Reconstruct a minimal RawPost from a stored candidate for late drafting.

@@ -106,6 +106,11 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE candidates ADD COLUMN missing TEXT",
     "ALTER TABLE candidates ADD COLUMN dimensions TEXT",
     "CREATE INDEX IF NOT EXISTS idx_candidates_unenriched ON candidates(enriched_at) WHERE enriched_at IS NULL",
+    // How many times dispatch has claimed this candidate and delivered nothing.
+    // The budget is given back each time (see `unfire`), so this is the only
+    // thing standing between a wrong SMTP password and the same post being
+    // retried on every tick until it expires.
+    "ALTER TABLE candidates ADD COLUMN send_failures INTEGER NOT NULL DEFAULT 0",
 ];
 
 pub async fn connect(url: &str) -> anyhow::Result<SqlitePool> {
@@ -247,6 +252,7 @@ pub async fn record_seen(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[derive(Default)]
 pub struct NewCandidate {
     pub urn: String,
     pub source: String,
@@ -683,8 +689,11 @@ pub async fn get(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<Candidate>
 pub async fn mark_fired(pool: &SqlitePool, c: &Candidate) -> anyhow::Result<bool> {
     let mut tx = pool.begin().await?;
     let ins = sqlx::query(
+        // 'pending' rather than 'ntfy+email': at this point the slot is claimed
+        // and nothing has been sent. `record_channel` writes what was actually
+        // delivered, and `unfire` removes the row when nothing was.
         "INSERT INTO notifications (candidate_id, company, fired_at, channel)
-         VALUES (?, ?, ?, 'ntfy+email') ON CONFLICT(candidate_id) DO NOTHING",
+         VALUES (?, ?, ?, 'pending') ON CONFLICT(candidate_id) DO NOTHING",
     )
     .bind(c.id)
     .bind(&c.company)
@@ -702,6 +711,54 @@ pub async fn mark_fired(pool: &SqlitePool, c: &Candidate) -> anyhow::Result<bool
         .await?;
     tx.commit().await?;
     Ok(true)
+}
+
+/// Give back a slot whose dispatch delivered nothing.
+///
+/// The claim has to happen before the send — it is the `INSERT` that makes
+/// firing exactly-once when two ticks race — which means a claim that turns out
+/// to be undeliverable has to be handed back, or the notification row stands as
+/// a record of something nobody was ever told. That row *is* the hourly budget,
+/// and UNIQUE(candidate_id) means it can never fire again: an unset
+/// SMTP_PASSWORD was enough to spend every slot, every hour, on silence.
+///
+/// Returns how many times delivery has now failed for this candidate.
+pub async fn unfire(pool: &SqlitePool, id: i64) -> anyhow::Result<i64> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM notifications WHERE candidate_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    // Back to 'scored' is back into `eligible` — the next tick will try again,
+    // which is the point: the post is still worth sending.
+    sqlx::query(
+        "UPDATE candidates
+            SET status = 'scored', notified_at = NULL, send_failures = send_failures + 1
+          WHERE id = ?",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    let (failures,): (i64,) = sqlx::query_as("SELECT send_failures FROM candidates WHERE id = ?")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(failures)
+}
+
+/// Record which channels actually delivered.
+///
+/// The claim is written as 'pending' because at that moment nothing has been
+/// sent yet. This is the correction, and it makes the notifications table an
+/// honest log of what went out rather than of what was attempted.
+pub async fn record_channel(pool: &SqlitePool, id: i64, channel: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE notifications SET channel = ? WHERE candidate_id = ?")
+        .bind(channel)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn set_draft(
@@ -996,4 +1053,129 @@ pub async fn all_scorable(pool: &SqlitePool) -> anyhow::Result<Vec<Candidate>> {
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One pool, shared by every test here, created once.
+    ///
+    /// Not an optimisation: opening a second sqlite pool in the same process
+    /// panics inside sqlx 0.7.4 while it builds a row against stale column
+    /// metadata. The application opens exactly one pool at startup and keeps it
+    /// for the life of the process, so one pool is also the shape being tested.
+    ///
+    /// Isolation comes from emptying the tables at the start of each test
+    /// instead, under a lock that keeps them from interleaving.
+    static DB_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static POOL: tokio::sync::OnceCell<SqlitePool> = tokio::sync::OnceCell::const_new();
+
+    /// Take the lock, get the pool, and start from an empty board.
+    async fn fixture() -> (std::sync::MutexGuard<'static, ()>, &'static SqlitePool) {
+        let guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let pool = POOL
+            .get_or_init(|| async {
+                let dir = std::env::temp_dir().join(format!(
+                    "hiring-radar-test-{}",
+                    std::process::id()
+                ));
+                // WAL leaves -wal and -shm beside the file, and a journal left
+                // by an earlier run is replayed into the new database as the
+                // schema it was written under.
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(&dir).expect("test dir");
+                connect(&format!("sqlite://{}", dir.join("radar.db").display()))
+                    .await
+                    .expect("test database")
+            })
+            .await;
+        for t in ["notifications", "candidates"] {
+            sqlx::query(&format!("DELETE FROM {t}"))
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        (guard, pool)
+    }
+
+    async fn candidate(pool: &SqlitePool, urn: &str) -> Candidate {
+        let n = NewCandidate {
+            urn: urn.into(),
+            source: "greenhouse".into(),
+            url: "https://example.com/job".into(),
+            title: "Backend Engineer".into(),
+            company: "Acme".into(),
+            score: 88.0,
+            priority: 88.0,
+            tier: "strong".into(),
+            detected_at: now(),
+            expires_at: now() + 3600,
+            settle_until: now() - 1,
+            apply_kind: "url".into(),
+            ..Default::default()
+        };
+        insert_candidate(pool, &n, "scored").await.unwrap();
+        eligible(pool).await.unwrap().pop().expect("one eligible row")
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_delivered_nothing_gives_the_slot_back() {
+        // The finding this was written for: `mark_fired` writes the row that
+        // *is* the hourly budget before anything is sent, and a wrong SMTP
+        // password used to leave it there — a post marked notified that nobody
+        // was told about, which UNIQUE(candidate_id) then made unrepeatable.
+        let (_serial, pool) = fixture().await;
+        let c = candidate(pool, "urn:1").await;
+
+        assert!(mark_fired(pool, &c).await.unwrap());
+        assert_eq!(budget_used(pool).await.unwrap(), 1);
+
+        let failures = unfire(pool, c.id).await.unwrap();
+        assert_eq!(failures, 1);
+        assert_eq!(budget_used(pool).await.unwrap(), 0, "the slot must come back");
+
+        // And it is eligible again, so the next tick actually retries it.
+        let again = eligible(pool).await.unwrap();
+        assert_eq!(again.len(), 1);
+        assert!(mark_fired(pool, &again[0]).await.unwrap(), "must be re-sendable");
+    }
+
+    #[tokio::test]
+    async fn a_delivered_send_records_the_channel_that_worked() {
+        // 'ntfy+email' was written before either had been attempted, so the
+        // table recorded intent and called it delivery.
+        let (_serial, pool) = fixture().await;
+        let c = candidate(pool, "urn:2").await;
+        mark_fired(pool, &c).await.unwrap();
+
+        let (before,): (String,) =
+            sqlx::query_as("SELECT channel FROM notifications WHERE candidate_id = ?")
+                .bind(c.id)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(before, "pending");
+
+        record_channel(pool, c.id, "ntfy").await.unwrap();
+        let (after,): (String,) =
+            sqlx::query_as("SELECT channel FROM notifications WHERE candidate_id = ?")
+                .bind(c.id)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(after, "ntfy", "only the channel that worked");
+        assert_eq!(budget_used(pool).await.unwrap(), 1, "a real send spends a slot");
+    }
+
+    #[tokio::test]
+    async fn repeated_failures_accumulate_so_the_retry_can_be_given_up_on() {
+        let (_serial, pool) = fixture().await;
+        let c = candidate(pool, "urn:3").await;
+        for expected in 1..=3 {
+            let c = eligible(pool).await.unwrap().pop().unwrap();
+            mark_fired(pool, &c).await.unwrap();
+            assert_eq!(unfire(pool, c.id).await.unwrap(), expected);
+        }
+    }
 }

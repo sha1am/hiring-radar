@@ -52,10 +52,11 @@ exceptional_min     = 92.0    # >= this fires immediately, jumping the queue
 settle_strong_secs  = 360     # strong posts wait this long, then release best-of-window
 candidate_ttl_secs  = 43200   # a losing post keeps competing for 12h, then expires
 
-# v2 nicety: relax the bar as the hour drains so a quiet hour doesn't waste the budget.
+# Spend cheap slots freely and expensive ones carefully: the bar moves with how
+# much of the rolling-hour budget is left, not with the clock.
 adaptive_threshold  = true
-adaptive_start      = 82.0    # required score at :00 with all 4 slots free
-adaptive_end        = 70.0    # required score at :59
+adaptive_start      = 82.0    # required score when the budget is nearly gone
+adaptive_end        = 70.0    # required score when all slots are free
 
 [ntfy]
 server = "https://ntfy.sh"

@@ -565,13 +565,24 @@ export function SettingsPanel() {
         </div>
 
         <Check
-          label="Relax the bar as the hour drains"
+          label="Move the bar with the remaining budget"
           checked={s.adaptive_threshold}
           onChange={(v) => set('adaptive_threshold', v)}
         />
         <div className="grid grid-cols-2 gap-3">
-          <Num label="Bar at :00" value={s.adaptive_start} onChange={(v) => set('adaptive_start', v)} />
-          <Num label="Bar at :59" value={s.adaptive_end} onChange={(v) => set('adaptive_end', v)} />
+          {/* The last slot of the hour is the expensive one — spend it on
+              something mediocre and the good post twenty minutes later waits.
+              The first is cheap, and not spending it wastes the hour. */}
+          <Num
+            label="Bar on the last slot"
+            value={s.adaptive_start}
+            onChange={(v) => set('adaptive_start', v)}
+          />
+          <Num
+            label="Bar with all slots free"
+            value={s.adaptive_end}
+            onChange={(v) => set('adaptive_end', v)}
+          />
         </div>
         <p className="text-xs text-slate-500">
           Values are clamped on save so the ladder can't invert: floor &lt; strong &lt; exceptional,

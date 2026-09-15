@@ -23,7 +23,11 @@ function stack(card: CardT, max = 4): string | null {
 
 /// Statuses worth printing: something was done to this posting. Everything
 /// else is the resting state and says nothing.
-const ACTIONED = ['sent', 'applied', 'dismissed', 'notified', 'expired']
+///
+/// "undeliverable" is the odd one out — nothing was done, three times over.
+/// It is here because a post that cleared the bar and never reached you is the
+/// one thing about this system you would want to know immediately.
+const ACTIONED = ['sent', 'applied', 'dismissed', 'notified', 'expired', 'undeliverable']
 
 /// One row on the radar.
 ///

@@ -97,10 +97,14 @@ pub struct Settings {
     pub settle_strong_secs: i64,
     #[serde(default = "def_ttl")]
     pub candidate_ttl_secs: i64,
+    /// Move the required score with the remaining budget rather than keeping a
+    /// flat `strong_min`. See `release::adaptive_bar`.
     #[serde(default)]
     pub adaptive_threshold: bool,
+    /// Required score when the budget is nearly spent — the strict end.
     #[serde(default = "def_adaptive_start")]
     pub adaptive_start: f64,
+    /// Required score when every slot is free — the relaxed end.
     #[serde(default = "def_adaptive_end")]
     pub adaptive_end: f64,
 
