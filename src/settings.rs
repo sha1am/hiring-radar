@@ -346,10 +346,3 @@ impl Settings {
     }
 }
 
-/// Parse a textarea where the user puts one entry per line (or a comma list).
-pub fn parse_list(raw: &str) -> Vec<String> {
-    raw.split(['\n', ','])
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}

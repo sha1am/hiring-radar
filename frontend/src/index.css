@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The dashboard is a thing you leave open in a tab all day. Dark by default,
+   and the body colour is set here rather than on a wrapper so overscroll on a
+   phone doesn't flash white. */
+:root {
+  color-scheme: dark;
+}
+body {
+  margin: 0;
+  background: #020617;
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

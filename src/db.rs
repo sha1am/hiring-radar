@@ -356,14 +356,6 @@ pub struct RadarFilter {
 }
 
 impl RadarFilter {
-    pub fn is_active(&self) -> bool {
-        !self.q.is_empty()
-            || !self.source.is_empty()
-            || !self.status.is_empty()
-            || !self.tier.is_empty()
-            || self.min_score > 0.0
-            || !self.tags.is_empty()
-    }
 }
 
 /// The window, narrowed by whatever the dashboard controls are set to.
@@ -613,19 +605,6 @@ pub async fn active(pool: &SqlitePool) -> anyhow::Result<Vec<Candidate>> {
     let rows = sqlx::query_as::<_, Candidate>(
         "SELECT * FROM candidates WHERE status = 'notified' ORDER BY notified_at DESC",
     )
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
-}
-
-/// Recently actioned items, for the history strip.
-pub async fn history(pool: &SqlitePool, limit: i64) -> anyhow::Result<Vec<Candidate>> {
-    let rows = sqlx::query_as::<_, Candidate>(
-        "SELECT * FROM candidates
-         WHERE status IN ('sent','dismissed','applied')
-         ORDER BY id DESC LIMIT ?",
-    )
-    .bind(limit)
     .fetch_all(pool)
     .await?;
     Ok(rows)

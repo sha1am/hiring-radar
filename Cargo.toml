@@ -7,7 +7,8 @@ description = "Self-hosted hiring-post radar: detect -> classify -> resume-match
 [dependencies]
 tokio = { version = "1.38", features = ["full"] }
 axum = { version = "0.7", features = ["macros", "multipart"] }
-tower-http = { version = "0.5", features = ["trace"] }
+# `fs` serves the built React bundle; `trace` is the request log.
+tower-http = { version = "0.5", features = ["trace", "fs"] }
 sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros"] }
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }

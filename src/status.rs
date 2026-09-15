@@ -104,6 +104,9 @@ pub enum Outcome {
 #[derive(Clone, Debug, Default)]
 pub struct Status {
     pub sources: BTreeMap<String, SourceStatus>,
+    /// When this process came up. Not currently shown; kept because "how long
+    /// has it been running" is the first question after "why is it empty".
+    #[allow(dead_code)]
     pub started_at: i64,
 }
 
@@ -157,10 +160,6 @@ impl Status {
 
     pub fn total_stored(&self) -> u64 {
         self.sources.values().map(|s| s.total_stored).sum()
-    }
-
-    pub fn total_below_floor(&self) -> u64 {
-        self.sources.values().map(|s| s.total_below_floor).sum()
     }
 
     pub fn total_wrong_location(&self) -> u64 {
@@ -309,33 +308,6 @@ pub enum Level {
     Info,
     Warn,
     Error,
-}
-
-/// "in 4m 12s" / "2m ago" — a countdown beats "soon" for someone staring at an
-/// empty board wondering whether it is broken.
-pub fn until(ts: i64) -> String {
-    let d = ts - now();
-    if d <= 0 {
-        return "due now".into();
-    }
-    if d < 60 {
-        format!("in {d}s")
-    } else if d < 3600 {
-        format!("in {}m {:02}s", d / 60, d % 60)
-    } else {
-        format!("in {}h {:02}m", d / 3600, (d % 3600) / 60)
-    }
-}
-
-pub fn since(ts: i64) -> String {
-    let d = (now() - ts).max(0);
-    if d < 60 {
-        format!("{d}s ago")
-    } else if d < 3600 {
-        format!("{}m ago", d / 60)
-    } else {
-        format!("{}h ago", d / 3600)
-    }
 }
 
 #[cfg(test)]

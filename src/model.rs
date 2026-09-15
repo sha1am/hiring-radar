@@ -138,17 +138,28 @@ pub struct Candidate {
     pub location: Option<String>,
     pub body: String,
     pub score: f64,
+    /// Priority at INSERT time, which is when age is always ~0 — so it equals
+    /// `score` for every row and decays for none. Nothing reads it: selection
+    /// calls `live_priority()` instead. Kept as a coarse index for the
+    /// pre-filter, and named here so the next person doesn't wire it back into
+    /// an ORDER BY.
+    #[allow(dead_code)]
     pub priority: f64,
     pub tier: String,
     pub status: String,
     pub detected_at: i64,
     pub posted_at: Option<i64>,
+    /// Written by the pipeline and read by the release engine's SQL, not by
+    /// Rust — hence unread here.
+    #[allow(dead_code)]
     pub expires_at: i64,
+    #[allow(dead_code)]
     pub settle_until: i64,
     pub apply_kind: String,
     pub apply_target: Option<String>,
     pub draft_subject: Option<String>,
     pub draft_body: Option<String>,
+    #[allow(dead_code)]
     pub notified_at: Option<i64>,
     /// The resume terms that drove this match, for "why did this fire".
     pub match_terms: Option<String>,

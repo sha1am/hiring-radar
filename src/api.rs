@@ -41,6 +41,63 @@ pub fn routes() -> Router<AppState> {
         .route("/api/candidate/:id/dismiss", post(dismiss))
         .route("/api/candidate/:id/applied", post(applied))
         .route("/api/candidate/:id/draft", post(save_draft))
+        .route(
+            "/api/settings/resume",
+            // A PDF resume comfortably exceeds axum's 2MB default.
+            post(resume_upload).layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)),
+        )
+        .route("/api/settings/resume/clear", post(resume_clear))
+}
+
+/// Upload a resume — PDF, plain text, or pasted.
+///
+/// Multipart rather than JSON because it carries a file, and the extraction
+/// (and its failure modes: a scanned PDF has no text layer) is shared with the
+/// HTML endpoint rather than reimplemented.
+async fn resume_upload(State(st): State<AppState>, mp: axum::extract::Multipart) -> impl IntoResponse {
+    let (text, filename) = match crate::web::read_resume_upload(mp).await {
+        Ok(v) => v,
+        Err(message) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({"ok": false, "message": message})),
+            )
+                .into_response()
+        }
+    };
+    match crate::web::store_resume(&st, text, filename).await {
+        Ok(message) => {
+            st.notify_ui();
+            let live = st.settings().await;
+            Json(serde_json::json!({
+                "ok": true,
+                "message": message,
+                "settings": settings_dto(&live),
+            }))
+            .into_response()
+        }
+        Err(message) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"ok": false, "message": message})),
+        )
+            .into_response(),
+    }
+}
+
+async fn resume_clear(State(st): State<AppState>) -> impl IntoResponse {
+    let mut s = (*st.settings().await).clone();
+    s.resume.clear();
+    s.resume_filename = None;
+    s.resume_updated_at = None;
+    let _ = db::save_settings(&st.pool, &s).await;
+    st.set_settings(s.clone()).await;
+    st.rebuild_resume("").await;
+    st.notify_ui();
+    Json(serde_json::json!({
+        "ok": true,
+        "message": "Resume cleared — scoring is back to your keyword list.",
+        "settings": settings_dto(&s),
+    }))
 }
 
 // ===================== shapes =====================
