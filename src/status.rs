@@ -38,6 +38,10 @@ pub struct SourceStatus {
     pub below_floor: usize,
     pub wrong_location: usize,
     pub wrong_stack: usize,
+    /// Postings for other departments — recruiters, nurses, drivers. Counted
+    /// rather than silently discarded: this is the number that tells you the
+    /// discipline rules have started eating jobs you wanted.
+    pub off_discipline: usize,
 
     // --- cumulative ---
     pub total_fetched: u64,
@@ -63,6 +67,7 @@ impl SourceStatus {
                 self.total_wrong_location += 1;
             }
             Outcome::WrongStack => self.wrong_stack += 1,
+            Outcome::OffDiscipline => self.off_discipline += 1,
             Outcome::BelowFloor { score } => {
                 self.below_floor += 1;
                 self.total_below_floor += 1;
@@ -81,6 +86,7 @@ impl SourceStatus {
         self.below_floor = 0;
         self.wrong_location = 0;
         self.wrong_stack = 0;
+        self.off_discipline = 0;
         self.notes.clear();
         self.last_error = None;
     }
@@ -106,6 +112,11 @@ pub enum Outcome {
     /// location: "only Go jobs" switched on must not look like the profile
     /// suddenly matching nothing.
     WrongStack,
+    /// Not an engineering job at all — a recruiter, a nurse, a driver. Counted
+    /// separately because it is the one filter that works off a word list of my
+    /// own invention, and a number climbing into the hundreds on a board you
+    /// care about is how you find out the list is wrong.
+    OffDiscipline,
 }
 
 #[derive(Clone, Debug, Default)]

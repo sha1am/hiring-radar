@@ -59,6 +59,21 @@ pub async fn ingest(
         return Ok(Outcome::WrongStack);
     }
 
+    // 2c. Discipline gate. One board per company means the whole payroll comes
+    //     down the same pipe — Optum publishes nurses, Delhivery publishes
+    //     warehouse staff, everybody publishes recruiters — and none of it is
+    //     evidence about you in either direction. Dropped here rather than
+    //     scored low, because a job in another department is a category error,
+    //     not a weak match, and because storing them buries every facet list on
+    //     the dashboard under words from someone else's career.
+    let profile = state.profile().await;
+    if profile.is_engineering() {
+        if let Some(field) = crate::enrich::off_discipline(&post.title) {
+            tracing::debug!(title = %post.title, field, "dropped: another discipline");
+            return Ok(Outcome::OffDiscipline);
+        }
+    }
+
     // Heuristic reading, first, because the ATS scores against it — and so the
     // filters work on a fresh install with no model configured. The LLM pass
     // refines both later.
@@ -72,7 +87,6 @@ pub async fn ingest(
     // confident-looking number derived from nothing is worse than a rough one
     // that admits what it is.
     let matcher = state.matcher().await;
-    let profile = state.profile().await;
 
     let (score, matched, assessment) = if profile.is_usable() {
         let a = crate::ats::assess(&profile, &facts, &post, &live);

@@ -189,6 +189,84 @@ const REMOTE_WORDS: &[&str] = &["fully remote", "100% remote", "remote-first", "
 const HYBRID_WORDS: &[&str] = &["hybrid", "days in office", "days a week in", "flexible office"];
 const ONSITE_WORDS: &[&str] = &["on-site", "onsite", "in office", "in-office", "office-based"];
 
+/// Disciplines that are not engineering at all.
+///
+/// Every company on the watchlist publishes its whole payroll through one
+/// board: Optum posts nurses, Delhivery posts warehouse staff, and all of them
+/// post recruiters. None of these score badly on their own merits, which is the
+/// problem — an HR listing names no technology and no engineering discipline,
+/// so a scorer that gives a posting the benefit of the doubt on both of those
+/// then hands it a passing grade on years, level and location, the three
+/// things that are true of you wherever you apply.
+///
+/// Title only, deliberately. "Our recruiting team is hiring" appears in half
+/// the engineering JDs large companies write, and "sales platform" is a thing
+/// backend engineers spend careers on.
+const OFF_DISCIPLINE: &[(&str, &[&str])] = &[
+    ("recruiting", &["recruiter", "recruiting", "recruitment", "talent acquisition", "talent partner",
+                     "human resources", "hrbp", "hr business partner", "hr generalist", "hr operations",
+                     "hr manager", "people partner", "people operations", "payroll", "sourcer"]),
+    ("sales", &["sales", "account executive", "account manager", "business development",
+                "inside sales", "key account", "bdr", "sdr"]),
+    ("marketing", &["marketing", "seo", "copywriter", "content writer", "social media",
+                    "brand manager", "public relations", "communications manager"]),
+    ("finance", &["accountant", "accounting", "accounts payable", "accounts receivable",
+                  "financial analyst", "controller", "auditor", "audit", "bookkeeper",
+                  "taxation", "treasury", "billing specialist", "underwriter", "actuary"]),
+    ("legal", &["counsel", "paralegal", "attorney", "compliance officer", "legal manager"]),
+    ("support", &["customer support", "customer service", "customer success", "help desk",
+                  "service desk", "call center", "call centre", "telecaller", "collections executive"]),
+    ("operations", &["delivery executive", "delivery driver", "truck driver", "rider", "warehouse",
+                     "logistics executive", "store manager", "field executive", "field officer",
+                     "housekeeping", "security guard", "technician", "procurement",
+                     "operations executive", "operations associate", "branch manager"]),
+    ("clinical", &["nurse", "nursing", "physician", "clinical", "pharmacist", "therapist",
+                   "medical coder", "radiologist", "dentist", "caregiver", "phlebotomist"]),
+    ("design", &["graphic designer", "visual designer", "ux designer", "ui designer",
+                 "product designer", "ux researcher", "illustrator", "motion designer"]),
+    ("product", &["product manager", "program manager", "project manager", "scrum master",
+                  "product owner", "business analyst", "delivery manager"]),
+    ("teaching", &["teacher", "instructor", "tutor", "faculty", "professor", "trainer", "curriculum"]),
+    ("consulting", &["business consultant", "management consultant", "strategy consultant",
+                     "research associate"]),
+];
+
+/// Words that mean the posting is for an engineer whatever else the title says.
+///
+/// Matched as whole words, and that is the entire trick: "engineering" is not
+/// "engineer", so "Engineering Recruiter" stays a recruiting job while
+/// "Software Engineer, Sales Platform" stays an engineering one.
+const ENGINEERING_WORDS: &[&str] = &[
+    "engineer", "engineers", "developer", "developers", "programmer", "sde", "sdet", "sre",
+    "devops", "architect", "scientist", "technologist", "coder", "hacker",
+];
+
+/// Whether a title says "engineer" in one of the ways titles say it.
+///
+/// Used as a guard, not as a filter: it decides whether a discipline word in a
+/// title is describing the job or describing the team the job is on.
+pub fn engineering_title(title: &str) -> bool {
+    let t = title.to_lowercase();
+    ENGINEERING_WORDS
+        .iter()
+        .any(|w| crate::text::contains_word(&t, w))
+}
+
+/// The non-engineering discipline this title belongs to, if any.
+///
+/// `None` means either "this is engineering" or "this is something I have no
+/// rule for" — the caller must not read it as an endorsement.
+pub fn off_discipline(title: &str) -> Option<&'static str> {
+    if engineering_title(title) {
+        return None;
+    }
+    let t = title.to_lowercase();
+    OFF_DISCIPLINE
+        .iter()
+        .find(|(_, words)| words.iter().any(|w| crate::text::contains_word(&t, w)))
+        .map(|(label, _)| *label)
+}
+
 /// The role rules, for anything that needs to ask the same question of a
 /// different document — the ATS reads a resume with exactly these.
 pub fn role_rules() -> &'static [(&'static str, &'static [&'static str])] {
@@ -649,5 +727,41 @@ mod tests {
         assert_eq!(f(Some(5), None).as_deref(), Some("5+ yrs"));
         assert_eq!(f(Some(3), Some(5)).as_deref(), Some("3\u{2013}5 yrs"));
         assert_eq!(f(None, None), None);
+    }
+
+    #[test]
+    fn the_jobs_that_arrive_with_the_engineering_ones_are_named() {
+        // One board per company means the whole payroll comes through it.
+        assert_eq!(off_discipline("Senior HR Business Partner"), Some("recruiting"));
+        assert_eq!(off_discipline("Talent Acquisition Specialist"), Some("recruiting"));
+        assert_eq!(off_discipline("Account Executive, Enterprise"), Some("sales"));
+        assert_eq!(off_discipline("Registered Nurse - ICU"), Some("clinical"));
+        assert_eq!(off_discipline("Technical Program Manager"), Some("product"));
+        assert_eq!(off_discipline("Warehouse Associate"), Some("operations"));
+    }
+
+    #[test]
+    fn a_discipline_word_about_the_team_is_not_the_job() {
+        // The whole reason the guard matches whole words: half of what an
+        // engineer is hired to build is named after another department.
+        assert_eq!(off_discipline("Software Engineer, Sales Platform"), None);
+        assert_eq!(off_discipline("Backend Developer - Marketing Technology"), None);
+        assert_eq!(off_discipline("Data Scientist, Clinical Research"), None);
+        assert_eq!(off_discipline("Staff Engineer, Payments & Billing"), None);
+    }
+
+    #[test]
+    fn engineering_recruiter_is_still_a_recruiter() {
+        // "engineering" is not "engineer", and this is the case that decides it.
+        assert_eq!(off_discipline("Engineering Recruiter"), Some("recruiting"));
+        assert_eq!(off_discipline("Technical Recruiter, Engineering"), Some("recruiting"));
+    }
+
+    #[test]
+    fn a_title_with_no_rule_at_all_is_not_an_endorsement() {
+        // None means "no rule matched", never "this one is for you".
+        assert_eq!(off_discipline("Member of Technical Staff"), None);
+        assert!(!engineering_title("Member of Technical Staff"));
+        assert!(engineering_title("Senior Software Engineer II"));
     }
 }

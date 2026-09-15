@@ -43,6 +43,7 @@ function counters(s: Source): string {
   if (s.below_floor > 0) parts.push(`${s.below_floor} below floor`)
   if (s.wrong_location > 0) parts.push(`${s.wrong_location} wrong place`)
   if (s.wrong_stack > 0) parts.push(`${s.wrong_stack} wrong stack`)
+  if (s.off_discipline > 0) parts.push(`${s.off_discipline} other departments`)
   if (s.not_hiring > 0) parts.push(`${s.not_hiring} not hiring`)
   if (s.best_score > 0) parts.push(`best ${s.best_score}`)
   return parts.join(' · ')

@@ -116,6 +116,7 @@ export interface Source {
   below_floor: number
   wrong_location: number
   wrong_stack: number
+  off_discipline: number
   not_hiring: number
   total_fetched: number
   total_stored: number

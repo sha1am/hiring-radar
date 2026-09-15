@@ -106,6 +106,14 @@ impl Profile {
         !self.stack.is_empty() || self.years.is_some()
     }
 
+    /// Whether this is an engineer's resume, which is what licenses ruling a
+    /// posting out for belonging to another department. A profile with no
+    /// discipline and no stack has said nothing about what it is, and nothing
+    /// should be thrown away on its behalf.
+    pub fn is_engineering(&self) -> bool {
+        !self.roles.is_empty() || !self.stack.is_empty()
+    }
+
     fn has(&self, tech: &str) -> bool {
         self.stack.iter().any(|t| t.eq_ignore_ascii_case(tech))
     }
@@ -198,6 +206,24 @@ pub fn assess(profile: &Profile, facts: &Facts, post: &RawPost, s: &Settings) ->
         };
     }
 
+    // A posting from another department is not a weak match, it is a category
+    // error, and no combination of the five dimensions below will ever say so:
+    // an HR listing names no technology and no engineering discipline, so it
+    // collects the benefit of the doubt on both and then passes on years, level
+    // and location — the three things true of you wherever you apply. Ruling it
+    // out here rather than scoring it low is the honest shape, and the reason
+    // says which department it belongs to so a misfire is visible.
+    if profile.is_engineering() {
+        if let Some(field) = crate::enrich::off_discipline(&post.title) {
+            return Assessment {
+                score: 0.0,
+                verdict: Some(Verdict::Skip.as_str().into()),
+                reason: format!("A {field} role, not an engineering one."),
+                ..Default::default()
+            };
+        }
+    }
+
     let mut met: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
 
@@ -207,12 +233,20 @@ pub fn assess(profile: &Profile, facts: &Facts, post: &RawPost, s: &Settings) ->
     let level = level_fit(profile, facts, &mut met, &mut missing);
     let location = location_fit(post, s);
 
+    // Nothing in the listing says what kind of work this is: no technologies,
+    // no discipline, and a title that never says "engineer". That is not a
+    // half-match, it is no evidence, and the three dimensions that still score
+    // well must not be allowed to add up to a recommendation.
+    let blind = facts.role.is_none()
+        && facts.stack.is_empty()
+        && !crate::enrich::engineering_title(&post.title);
+
     let dimensions = vec![stack, years, role, level, location];
     let sum: f64 = dimensions.iter().map(|d| d.fit * d.weight).sum();
-    let score = (sum * relevance_factor(&dimensions)).clamp(0.0, 100.0);
+    let score = (sum * relevance_factor(&dimensions, blind)).clamp(0.0, 100.0);
 
-    let verdict = verdict_for(score, &dimensions, &missing);
-    let reason = reason_for(verdict, &dimensions, &missing);
+    let verdict = verdict_for(score, &dimensions, blind);
+    let reason = reason_for(verdict, &dimensions, &missing, blind);
 
     Assessment {
         score,
@@ -240,7 +274,13 @@ pub fn assess(profile: &Profile, facts: &Facts, post: &RawPost, s: &Settings) ->
 /// The floor of 0.35 rather than 0 is deliberate: a posting can name no
 /// technology at all, and collapsing those to nothing would punish a listing
 /// for being vaguely written rather than for being wrong for you.
-fn relevance_factor(dims: &[Dimension]) -> f64 {
+/// The floor is for a posting that is vague, not for one that says nothing at
+/// all: `blind` is the difference between "we use a modern stack" and a title
+/// and a location with no description behind them.
+fn relevance_factor(dims: &[Dimension], blind: bool) -> f64 {
+    if blind {
+        return 0.35;
+    }
     let fit = |name: &str| dims.iter().find(|d| d.name == name).map(|d| d.fit).unwrap_or(0.5);
     let relevance = 0.6 * fit("stack") + 0.4 * fit("role");
     0.35 + 0.65 * relevance
@@ -509,8 +549,15 @@ fn location_fit(post: &RawPost, s: &Settings) -> Dimension {
 /// years than you have, and telling you to apply to that is telling you to
 /// waste an afternoon. So a hard shortfall on years or stack caps the verdict
 /// regardless of the sum.
-fn verdict_for(score: f64, dims: &[Dimension], missing: &[String]) -> Verdict {
+fn verdict_for(score: f64, dims: &[Dimension], blind: bool) -> Verdict {
     let fit_of = |name: &str| dims.iter().find(|d| d.name == name).map(|d| d.fit).unwrap_or(1.0);
+
+    // Never advise applying to something nobody has read. Reach at best: go and
+    // open it, and if it is any good the next crawl with a description will say
+    // so properly.
+    if blind {
+        return if score >= 25.0 { Verdict::Reach } else { Verdict::Skip };
+    }
 
     let badly_short = fit_of("years") <= 0.3 || fit_of("stack") < 0.25 || fit_of("role") < 0.3;
     if badly_short {
@@ -542,7 +589,13 @@ fn verdict_for(score: f64, dims: &[Dimension], missing: &[String]) -> Verdict {
 /// which reads as evidence but says nothing — "go, kafka, systems" is true of
 /// every posting you would ever look at. This names the dimension that decided
 /// it, which is the thing you would have wanted to know.
-fn reason_for(v: Verdict, dims: &[Dimension], missing: &[String]) -> String {
+fn reason_for(v: Verdict, dims: &[Dimension], missing: &[String], blind: bool) -> String {
+    if blind {
+        return "Too little in the listing to judge — it names no technologies \
+                and no discipline. Worth opening if the company interests you."
+            .into();
+    }
+
     let weakest = dims
         .iter()
         .filter(|d| d.fit < 0.9)
@@ -768,6 +821,74 @@ mod tests {
         );
         assert_eq!(a.score, 0.0);
         assert_eq!(a.verdict.as_deref(), Some("skip"));
+    }
+
+    /// A posting with everything the qualifiers like and nothing else: the
+    /// right seniority, the right number of years, the right city, and not one
+    /// word about what you would build.
+    fn qualifiers_only(title: &str) -> (Facts, RawPost) {
+        (
+            Facts {
+                role: None,
+                level: Some("senior".into()),
+                years_min: Some(3),
+                years_max: None,
+                work_mode: None,
+                employment: None,
+                stack: vec![],
+            },
+            post(title, "Partner with leaders across the business.", "Bengaluru, India"),
+        )
+    }
+
+    #[test]
+    fn another_department_is_not_a_weak_match_it_is_no_match() {
+        // This is the bug that produced HR roles on an engineer's dashboard.
+        // Scored on the five dimensions it took 52 of 100 — half marks on a
+        // stack it never mentions, most of the role dimension for being
+        // unreadable, and full marks on years, level and location, which are
+        // true of you wherever you apply.
+        let (f, p) = qualifiers_only("Senior HR Business Partner");
+        let a = assess(&candidate(), &f, &p, &settings());
+        assert_eq!(a.score, 0.0, "{a:?}");
+        assert_eq!(a.verdict.as_deref(), Some("skip"));
+        assert!(a.reason.contains("recruiting"), "{}", a.reason);
+    }
+
+    #[test]
+    fn a_job_on_the_sales_platform_is_still_an_engineering_job() {
+        // The guard has to survive the titles engineers are actually hired
+        // under, or ruling out HR quietly rules out half of payments.
+        let a = assess(
+            &candidate(),
+            &facts("backend", "mid", 3, &["Go", "Kafka"]),
+            &post("Software Engineer, Sales Platform", "Go, Kafka.", "Bengaluru, India"),
+            &settings(),
+        );
+        assert!(a.score >= 70.0, "{a:?}");
+    }
+
+    #[test]
+    fn a_listing_that_says_nothing_is_never_advice() {
+        // Workday listings arrive without descriptions when the detail budget
+        // is spent. No stack, no discipline, no "engineer" in the title — the
+        // qualifiers still score, and must not be allowed to add up to
+        // "apply". Reach at best, and it says why.
+        let (f, p) = qualifiers_only("Associate, Client Delivery");
+        let a = assess(&candidate(), &f, &p, &settings());
+        assert!(a.score < 30.0, "{a:?}");
+        assert!(matches!(a.verdict.as_deref(), Some("reach") | Some("skip")), "{a:?}");
+        assert!(a.reason.contains("Too little"), "{}", a.reason);
+    }
+
+    #[test]
+    fn a_titled_engineering_role_is_not_treated_as_blind() {
+        // "Senior Software Engineer" with no description matches no role rule
+        // and names no technology, but it is plainly engineering and must not
+        // be damped to the floor for arriving without a body.
+        let (f, p) = qualifiers_only("Senior Software Engineer");
+        let a = assess(&candidate(), &f, &p, &settings());
+        assert!(a.score > 40.0, "{a:?}");
     }
 
     #[test]
