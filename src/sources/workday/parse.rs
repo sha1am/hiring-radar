@@ -54,8 +54,18 @@ pub fn posted_at(display: &str, now: i64) -> Option<i64> {
     }
 }
 
-pub fn to_post(t: &Target, company: &str, p: Posting, detail: Option<Detail>, now: i64) -> RawPost {
-    let url = t.public_url(&p.external_path);
+/// `None` for a posting too incomplete to act on — no title, or no path to
+/// link to. One malformed row costs one row.
+pub fn to_post(
+    t: &Target,
+    company: &str,
+    p: Posting,
+    detail: Option<Detail>,
+    now: i64,
+) -> Option<RawPost> {
+    let title = p.title.clone()?;
+    let external_path = p.external_path.clone()?;
+    let url = t.public_url(&external_path);
 
     // The requisition id is stable across re-postings and re-titles; the path is
     // not. Prefer it, and scope everything to the tenant because two companies
@@ -64,7 +74,7 @@ pub fn to_post(t: &Target, company: &str, p: Posting, detail: Option<Detail>, no
         .as_ref()
         .and_then(|d| d.job_req_id.clone())
         .or_else(|| p.bullet_fields.first().cloned())
-        .unwrap_or_else(|| p.external_path.clone());
+        .unwrap_or_else(|| external_path.clone());
 
     // The detail call carries a real date. When we paid for it, use it.
     let posted = detail
@@ -89,11 +99,11 @@ pub fn to_post(t: &Target, company: &str, p: Posting, detail: Option<Detail>, no
         (None, None) => None,
     };
 
-    RawPost {
+    Some(RawPost {
         source: SOURCE.into(),
         external_id: format!("{}:{req}", t.tenant),
         url: url.clone(),
-        title: p.title,
+        title,
         company: company.to_string(),
         location,
         body: detail
@@ -103,7 +113,7 @@ pub fn to_post(t: &Target, company: &str, p: Posting, detail: Option<Detail>, no
         posted_at: posted,
         apply: ApplyChannel::ExternalUrl(url),
         synthetic_title: false,
-    }
+    })
 }
 
 /// The company name to show for a tenant.
@@ -156,14 +166,21 @@ mod tests {
     }
 
     #[test]
+    fn a_posting_with_no_title_is_dropped_not_stored_blank() {
+        let mut p = posting();
+        p.title = None;
+        assert!(to_post(&target(), "Acme", p, None, NOW).is_none());
+    }
+
+    #[test]
     fn the_req_id_is_the_identity_and_it_is_tenant_scoped() {
-        let p = to_post(&target(), "Acme", posting(), None, NOW);
+        let p = to_post(&target(), "Acme", posting(), None, NOW).unwrap();
         assert_eq!(p.external_id, "acme:R99");
     }
 
     #[test]
     fn the_card_links_to_the_human_page_not_the_api() {
-        let p = to_post(&target(), "Acme", posting(), None, NOW);
+        let p = to_post(&target(), "Acme", posting(), None, NOW).unwrap();
         assert!(p.url.contains("/Careers/job/Bengaluru/"), "{}", p.url);
         assert!(!p.url.contains("/wday/cxs/"), "{}", p.url);
     }
@@ -177,7 +194,7 @@ mod tests {
             "startDate": "2026-09-10"
         }))
         .unwrap();
-        let p = to_post(&target(), "Acme", posting(), Some(detail), NOW);
+        let p = to_post(&target(), "Acme", posting(), Some(detail), NOW).unwrap();
         assert_eq!(p.location.as_deref(), Some("Bengaluru, India"));
         assert_eq!(p.body, "Go & Kafka");
     }
@@ -188,7 +205,7 @@ mod tests {
         posting.locations_text = Some("Bengaluru, India".into());
         let detail: Detail =
             serde_json::from_value(serde_json::json!({"country": {"descriptor": "India"}})).unwrap();
-        let p = to_post(&target(), "Acme", posting, Some(detail), NOW);
+        let p = to_post(&target(), "Acme", posting, Some(detail), NOW).unwrap();
         assert_eq!(p.location.as_deref(), Some("Bengaluru, India"));
     }
 
@@ -197,7 +214,7 @@ mod tests {
         let detail: Detail =
             serde_json::from_value(serde_json::json!({"startDate": "2026-09-10T00:00:00Z"}))
                 .unwrap();
-        let p = to_post(&target(), "Acme", posting(), Some(detail), NOW);
+        let p = to_post(&target(), "Acme", posting(), Some(detail), NOW).unwrap();
         assert_eq!(p.posted_at, crate::timeparse::parse("2026-09-10T00:00:00Z"));
     }
 }

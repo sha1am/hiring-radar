@@ -147,9 +147,14 @@ impl Workday {
                     continue;
                 }
 
-                let key = format!("{}:{}", t.tenant, p.external_path);
+                // No path means nothing to fetch and nothing to link to; the
+                // parser drops these, so don't spend a request on one first.
+                let Some(path) = p.external_path.clone() else {
+                    continue;
+                };
+                let key = format!("{}:{path}", t.tenant);
                 let detail = if budget > 0 && !self.already_detailed(&key) {
-                    match self.client.detail(t, &p.external_path).await {
+                    match self.client.detail(t, &path).await {
                         Ok(d) => {
                             budget -= 1;
                             self.remember_detailed(key);
@@ -167,7 +172,9 @@ impl Workday {
                     None
                 };
 
-                fresh.push(parse::to_post(t, &company, p, detail, now));
+                if let Some(post) = parse::to_post(t, &company, p, detail, now) {
+                    fresh.push(post);
+                }
             }
 
             // `total` is 0 from page two onward, so it cannot end this loop. A

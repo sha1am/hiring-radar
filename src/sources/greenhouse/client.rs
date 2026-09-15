@@ -81,7 +81,18 @@ impl Client {
         let data: Resp = resp
             .json()
             .await
-            .map_err(|e| format!("unreadable response — {}", brief(&e)))?;
+            .map_err(|e| {
+                let msg = e.to_string();
+                // "unreadable response" sent people looking for a schema change
+                // that was never there: Stripe and GitLab publish hundreds of
+                // jobs with full descriptions, and the body simply did not
+                // finish arriving inside the timeout.
+                if msg.contains("timed out") {
+                    "timed out reading the response — large board, raise RADAR_HTTP_TIMEOUT".into()
+                } else {
+                    format!("unreadable response — {}", brief(&e))
+                }
+            })?;
         Ok(data.jobs)
     }
 }

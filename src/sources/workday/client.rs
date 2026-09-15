@@ -12,6 +12,10 @@ use serde::Deserialize;
 /// to go deeper.
 pub const PAGE_SIZE: usize = 20;
 
+/// Several Workday tenants 403 a request without a browser-shaped User-Agent.
+const BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
 #[derive(Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct JobsPage {
@@ -34,9 +38,18 @@ pub struct JobsPage {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Posting {
-    pub title: String,
-    /// Path relative to the site root, e.g. `/job/Bengaluru/Engineer_R12345`.
-    pub external_path: String,
+    /// Optional, despite being the one field you would bet on.
+    ///
+    /// Cisco and Guidewire both return postings with no `title` at all, and as
+    /// a required field that failed the whole page — "missing field `title` at
+    /// line 1 column 943" killed every one of the other nineteen jobs on it.
+    /// One malformed row should cost one row.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Also optional, and for the same reason: a posting with no path is one we
+    /// could never link to, so it is dropped rather than fatal.
+    #[serde(default)]
+    pub external_path: Option<String>,
     #[serde(default)]
     pub locations_text: Option<String>,
     /// A localised display string — "Posted Today", "Posted 30+ Days Ago". Not
@@ -125,6 +138,11 @@ impl Client {
             .header("accept", "application/json")
             // Without this some tenants return a localised body, or a 415.
             .header("accept-language", "en-US")
+            // Workday fronts some tenants with a bot filter that 403s anything
+            // without a browser-shaped User-Agent. This is not evasion of a
+            // login or a paywall — the same JSON is served to the tenant's own
+            // public careers page — it is just what the endpoint expects.
+            .header("user-agent", BROWSER_UA)
             .json(&body)
             .send()
             .await
@@ -133,15 +151,33 @@ impl Client {
         let status = resp.status();
         if !status.is_success() {
             let code = status.as_u16();
+            // 422 is how several tenants say "that offset is past the end" —
+            // Dell, Expedia and Walmart all return it once you page far enough.
+            // Reporting it as a failure marked healthy tenants broken *after*
+            // they had already handed over every job they had.
+            if code == 422 && offset > 0 {
+                return Ok(JobsPage::default());
+            }
             return Err(match code {
                 404 => "HTTP 404 — no such tenant or site; check the careers URL".to_string(),
+                403 => "HTTP 403 — the tenant is refusing this client; it may be geo- or bot-blocked"
+                    .to_string(),
+                422 => "HTTP 422 — the tenant rejected the query shape on the first page".to_string(),
                 _ => format!("HTTP {code}{}", status_hint(code)),
             });
         }
 
-        resp.json::<JobsPage>()
-            .await
-            .map_err(|e| format!("unreadable response — {}", brief(&e)))
+        resp.json::<JobsPage>().await.map_err(|e| {
+            let msg = e.to_string();
+            // A body that never finished arriving is a timeout, not a parse
+            // error, and calling it "unreadable response" sent people looking
+            // for a schema change that was never there.
+            if msg.contains("timed out") || msg.contains("operation timed out") {
+                "timed out reading the response — the board is large or slow".to_string()
+            } else {
+                format!("unreadable response — {}", brief(&e))
+            }
+        })
     }
 
     /// One posting's description. Costs a request, so callers ration it.
@@ -160,6 +196,7 @@ impl Client {
             .get(&url)
             .header("accept", "application/json")
             .header("accept-language", "en-US")
+            .header("user-agent", BROWSER_UA)
             .send()
             .await
             .map_err(|e| format!("unreachable — {}", brief(&e)))?;
@@ -208,13 +245,30 @@ mod tests {
     }
 
     #[test]
+    fn a_posting_with_no_title_does_not_kill_the_page() {
+        // Cisco and Guidewire really do return these, and as a required field
+        // one of them failed the whole page — nineteen good jobs lost to one
+        // malformed row.
+        let p: JobsPage = serde_json::from_value(serde_json::json!({
+            "jobPostings": [
+                {"externalPath": "/job/X"},
+                {"title": "SRE", "externalPath": "/job/Y"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(p.job_postings.len(), 2);
+        assert!(p.job_postings[0].title.is_none());
+        assert_eq!(p.job_postings[1].title.as_deref(), Some("SRE"));
+    }
+
+    #[test]
     fn a_posting_missing_the_optional_fields_still_parses() {
         // Several tenants omit bulletFields and postedOn entirely.
         let p: JobsPage = serde_json::from_value(serde_json::json!({
             "jobPostings": [{"title": "SRE", "externalPath": "/job/X"}]
         }))
         .unwrap();
-        assert_eq!(p.job_postings[0].title, "SRE");
+        assert_eq!(p.job_postings[0].title.as_deref(), Some("SRE"));
         assert!(p.job_postings[0].posted_on.is_none());
     }
 
