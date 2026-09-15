@@ -207,12 +207,26 @@ pub fn diagnosis(st: &Status, floor: f64, rows_in_window: i64) -> (Level, String
 
     let failing = st.failing_targets();
     if !failing.is_empty() && st.total_fetched() == 0 {
+        // Only offer the Greenhouse hint when Greenhouse is actually what
+        // failed. Appending it unconditionally sent people to check board
+        // tokens when the real message was about a missing LinkedIn queryId —
+        // a diagnosis panel that points at the wrong subsystem is worse than
+        // one that says nothing.
+        let greenhouse_failing = st
+            .sources
+            .get("greenhouse")
+            .map(|s| s.enabled && s.notes.iter().any(|n| !n.ok))
+            .unwrap_or(false);
+        let hint = if greenhouse_failing {
+            " A wrong Greenhouse board token returns 404 and looks exactly like \
+             an empty board — check the tokens in Settings → Sources."
+        } else {
+            ""
+        };
         return (
             Level::Error,
             format!(
-                "Every target failed, so nothing has been crawled: {}. \
-                 A wrong Greenhouse board token returns 404 and looks exactly like \
-                 an empty board — check the tokens in Settings → Sources.",
+                "Every target failed, so nothing has been crawled: {}.{hint}",
                 failing.join("; ")
             ),
         );
@@ -343,6 +357,29 @@ mod tests {
         let (lvl, msg) = diagnosis(&s, 55.0, 0);
         assert_eq!(lvl, Level::Info);
         assert!(msg.contains("First crawl"), "{msg}");
+    }
+
+    /// Advice for the wrong subsystem is worse than no advice: this fired
+    /// "check your Greenhouse board tokens" at someone whose only failure was a
+    /// missing LinkedIn queryId.
+    #[test]
+    fn does_not_blame_greenhouse_when_greenhouse_is_not_the_problem() {
+        let mut s = Status::new();
+        s.sources.insert("greenhouse".into(), src(false));
+        let mut v = src(true);
+        v.last_run = Some(now());
+        v.notes = vec![crate::sources::Note {
+            text: "no queryId — grab one from DevTools".into(),
+            ok: false,
+        }];
+        s.sources.insert("linkedin_voyager".into(), v);
+        let (lvl, msg) = diagnosis(&s, 55.0, 0);
+        assert_eq!(lvl, Level::Error);
+        assert!(msg.contains("queryId"), "{msg}");
+        assert!(
+            !msg.contains("Greenhouse"),
+            "must not point at Greenhouse when Greenhouse is off: {msg}"
+        );
     }
 
     /// The case that actually bit: tokens 404, board looks simply empty.
