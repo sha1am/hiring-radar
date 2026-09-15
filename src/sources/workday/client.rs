@@ -17,11 +17,16 @@ pub const PAGE_SIZE: usize = 20;
 pub struct JobsPage {
     #[serde(default)]
     pub job_postings: Vec<Posting>,
-    /// **Not usable for pagination.** It is correct on the first page and then
-    /// collapses to 0 on every page after, so the obvious
-    /// `while fetched < total` loop exits after one page and quietly reports the
-    /// first twenty jobs as the whole company. Page until a page comes back
-    /// short instead.
+    /// **Not usable for pagination**, which is why nothing reads it.
+    ///
+    /// It is correct on the first page and then collapses to 0 on every page
+    /// after, so the obvious `while fetched < total` loop exits after one page
+    /// and quietly reports the first twenty jobs as the whole company. Page
+    /// until a page comes back short instead.
+    ///
+    /// Kept, unread, so the trap is documented where someone would otherwise
+    /// reach for it — and so the test below can assert the shape.
+    #[allow(dead_code)]
     #[serde(default)]
     pub total: i64,
 }

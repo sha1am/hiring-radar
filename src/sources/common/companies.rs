@@ -35,10 +35,6 @@ pub struct List {
 }
 
 impl List {
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     /// One line for the status panel, naming the file so the fix is obvious.
     pub fn note(&self) -> String {
         let p = self.path.display();
@@ -48,7 +44,11 @@ impl List {
             (None, false) if self.entries.is_empty() => {
                 format!("{p}: empty — add one company per line")
             }
-            (None, false) => format!("{p}: {} companies", self.entries.len()),
+            (None, false) => format!(
+                "{p}: {} {}",
+                self.entries.len(),
+                if self.entries.len() == 1 { "company" } else { "companies" }
+            ),
         }
     }
 }

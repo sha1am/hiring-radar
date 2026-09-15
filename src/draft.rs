@@ -108,3 +108,47 @@ pub fn build_drafter(cfg: &DraftCfg, client: reqwest::Client) -> Box<dyn Drafter
         _ => Box::new(TemplateDrafter),
     }
 }
+
+/// Fill in drafts for cards that don't have one yet, and persist them.
+///
+/// Drafts are normally written at detection time, but only for posts that clear
+/// the strong bar — drafting every backfilled post during the first crawl would
+/// stall it, and with a local LLM configured it would stall it badly. The outbox
+/// bar sits lower than that, so it surfaces cards that were never drafted.
+///
+/// So they are filled in here, lazily, for what is actually on screen, and
+/// written back so it happens once per card rather than once per page view.
+/// Shared between the HTML and JSON outboxes on purpose: two implementations of
+/// "draft the undrafted" is how one of them ends up not persisting.
+pub async fn fill_missing(
+    st: &crate::state::AppState,
+    items: &mut [crate::model::Candidate],
+    live: &Settings,
+) {
+    let name = st.cfg.profile.name.clone();
+    let email = st.cfg.profile.email.clone();
+
+    for c in items.iter_mut() {
+        if c.draft_body.is_some() {
+            continue;
+        }
+        let post = RawPost {
+            source: c.source.clone(),
+            external_id: c.urn.clone(),
+            url: c.url.clone(),
+            title: c.title.clone(),
+            company: c.company.clone(),
+            location: c.location.clone(),
+            body: c.body.clone(),
+            posted_at: c.posted_at,
+            apply: c.apply(),
+            synthetic_title: c.source == "linkedin_voyager",
+        };
+        let (subject, body) = st.drafter.draft(&post, live, &name, &email).await;
+        if let Err(e) = crate::db::set_draft(&st.pool, c.id, &subject, &body).await {
+            tracing::warn!(id = c.id, %e, "draft backfill failed to persist");
+        }
+        c.draft_subject = Some(subject);
+        c.draft_body = Some(body);
+    }
+}

@@ -40,6 +40,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/settings/resume/clear", post(resume_clear))
         .route("/assets/htmx.min.js", get(htmx_asset))
+        .merge(crate::api::routes())
         .with_state(state)
 }
 
@@ -320,7 +321,7 @@ fn status_chip(status: &str) -> (&'static str, &'static str) {
     }
 }
 
-fn source_label(source: &str) -> &str {
+pub fn source_label(source: &str) -> &str {
     match source {
         "greenhouse" => "greenhouse",
         "linkedin_guest" => "li·jobs",
@@ -1879,32 +1880,7 @@ async fn render_outbox(st: &AppState) -> String {
     let mut items = db::outbox(&st.pool, min, 100).await.unwrap_or_default();
     let total = db::outbox_count(&st.pool, min).await.unwrap_or(0);
 
-    // Backfilled posts are stored without a draft — drafting hundreds during
-    // the first crawl would stall it, and with a local LLM configured it would
-    // stall it badly. So they are filled in here, for what is actually on
-    // screen, and persisted so it happens once.
-    let matcher_name = st.cfg.profile.name.clone();
-    let email = st.cfg.profile.email.clone();
-    for c in items.iter_mut() {
-        if c.draft_body.is_none() {
-            let post = crate::model::RawPost {
-                source: c.source.clone(),
-                external_id: c.urn.clone(),
-                url: c.url.clone(),
-                title: c.title.clone(),
-                company: c.company.clone(),
-                location: c.location.clone(),
-                body: c.body.clone(),
-                posted_at: c.posted_at,
-                apply: c.apply(),
-                synthetic_title: c.source == "linkedin_voyager",
-            };
-            let (subject, body) = st.drafter.draft(&post, &live, &matcher_name, &email).await;
-            let _ = db::set_draft(&st.pool, c.id, &subject, &body).await;
-            c.draft_subject = Some(subject);
-            c.draft_body = Some(body);
-        }
-    }
+    crate::draft::fill_missing(st, &mut items, &live).await;
 
     let cards = if items.is_empty() {
         format!(

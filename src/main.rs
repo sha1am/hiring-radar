@@ -1,3 +1,4 @@
+mod api;
 mod classify;
 mod config;
 mod db;
