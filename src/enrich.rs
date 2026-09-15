@@ -189,6 +189,31 @@ const REMOTE_WORDS: &[&str] = &["fully remote", "100% remote", "remote-first", "
 const HYBRID_WORDS: &[&str] = &["hybrid", "days in office", "days a week in", "flexible office"];
 const ONSITE_WORDS: &[&str] = &["on-site", "onsite", "in office", "in-office", "office-based"];
 
+/// The role rules, for anything that needs to ask the same question of a
+/// different document — the ATS reads a resume with exactly these.
+pub fn role_rules() -> &'static [(&'static str, &'static [&'static str])] {
+    ROLE_RULES
+}
+
+/// Does this text describe the given role? Used to read a resume's own
+/// discipline with the same rules a posting is read with, so the two sides of
+/// the comparison cannot disagree about what "backend" means.
+pub fn role_matches(hay: &str, role: &str) -> bool {
+    ROLE_RULES
+        .iter()
+        .find(|(r, _)| *r == role)
+        .map(|(_, words)| contains_any(hay, words))
+        .unwrap_or(false)
+}
+
+pub fn level_matches(hay: &str, level: &str) -> bool {
+    LEVEL_RULES
+        .iter()
+        .find(|(l, _)| *l == level)
+        .map(|(_, words)| contains_any(hay, words))
+        .unwrap_or(false)
+}
+
 /// Read what can be read without a model.
 pub fn heuristic(post: &RawPost) -> Facts {
     let title = post.title.to_lowercase();

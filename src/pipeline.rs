@@ -59,10 +59,31 @@ pub async fn ingest(
         return Ok(Outcome::WrongStack);
     }
 
-    // 3. Score against the profile + resume.
+    // Heuristic reading, first, because the ATS scores against it — and so the
+    // filters work on a fresh install with no model configured. The LLM pass
+    // refines both later.
+    let facts = crate::enrich::heuristic(&post);
+
+    // 3. Score it.
+    //
+    // The ATS when there is enough of a profile to assess against, the lexical
+    // scorer otherwise. Not a preference — the ATS compares structured facts on
+    // both sides, and with no resume loaded there is nothing on one of them. A
+    // confident-looking number derived from nothing is worse than a rough one
+    // that admits what it is.
     let matcher = state.matcher().await;
-    let scorer = LexicalScorer;
-    let (score, matched) = scorer.score(&post, &live, &matcher);
+    let profile = state.profile().await;
+
+    let (score, matched, assessment) = if profile.is_usable() {
+        let a = crate::ats::assess(&profile, &facts, &post, &live);
+        // `met` stands in for the old term list: what the posting asked for and
+        // you have, which is a far better answer to "why did this fire" than a
+        // list of words the two documents share.
+        (a.score, a.met.clone(), Some(a))
+    } else {
+        let (score, matched) = LexicalScorer.score(&post, &live, &matcher);
+        (score, matched, None)
+    };
 
     // Every classified post feeds the IDF corpus, including ones about to be
     // dropped — a post we don't want still tells us which terms are common.
@@ -91,10 +112,6 @@ pub async fn ingest(
         (None, None)
     };
 
-    // Heuristic reading, now, so the filters work on a fresh install with no
-    // model configured. The LLM pass refines this in the background.
-    let facts = crate::enrich::heuristic(&post);
-
     let nc = db::NewCandidate {
         urn: post.urn(),
         source: post.source.clone(),
@@ -121,6 +138,12 @@ pub async fn ingest(
         // Deterministic from the gazetteer, not from the model — a region is a
         // lookup, and asking an LLM to do lookups is how you get Bengaluru
         // filed under Europe on a bad day.
+        verdict: assessment.as_ref().and_then(|a| a.verdict.clone()),
+        reason: assessment.as_ref().map(|a| a.reason.clone()),
+        missing: assessment.as_ref().and_then(|a| crate::tags::encode(&a.missing)),
+        dimensions: assessment
+            .as_ref()
+            .and_then(|a| serde_json::to_string(&a.dimensions).ok()),
         region: post
             .location
             .as_deref()
@@ -143,4 +166,62 @@ pub async fn ingest(
             "scored: {}", post.title);
     }
     Ok(Outcome::Stored { score })
+}
+
+/// Re-assess everything on the board against the current profile.
+///
+/// Uploading a resume changes what every score means, and without this the
+/// board keeps showing numbers computed against whatever it knew before — a
+/// hundred rows scored by the lexical fallback sitting next to new ones scored
+/// by the ATS, indistinguishable and not comparable. That is worse than either
+/// alone, because the sort order silently mixes two scales.
+///
+/// Rows you have already acted on are left alone: re-scoring something you
+/// dismissed cannot change your mind for you, and re-scoring something you have
+/// applied to would rewrite history.
+pub async fn rescore_all(state: &AppState) -> anyhow::Result<usize> {
+    let live = state.settings().await;
+    let profile = state.profile().await;
+    if !profile.is_usable() {
+        // Nothing to score against; the existing numbers are the best available.
+        return Ok(0);
+    }
+
+    let rows = db::all_scorable(&state.pool).await?;
+    let mut changed = 0usize;
+
+    for c in &rows {
+        let post = crate::model::RawPost {
+            source: c.source.clone(),
+            external_id: c.urn.clone(),
+            url: c.url.clone(),
+            title: c.title.clone(),
+            company: c.company.clone(),
+            location: c.location.clone(),
+            body: c.body.clone(),
+            posted_at: c.posted_at,
+            apply: c.apply(),
+            synthetic_title: c.source == "linkedin_voyager",
+        };
+        // The stored facts, not a fresh extraction: the LLM pass may have
+        // sharpened them, and throwing that away to re-derive from the body
+        // would undo work already paid for.
+        let facts = c.facts();
+        let a = crate::ats::assess(&profile, &facts, &post, &live);
+
+        // A row that drops below the floor stays visible rather than
+        // disappearing. It is history now, and silently deleting the board
+        // because you edited your resume is alarming rather than helpful.
+        let tier = crate::model::Tier::from_score(a.score, &live)
+            .map(|t| t.as_str().to_string())
+            .unwrap_or_else(|| "marginal".to_string());
+
+        if (a.score - c.score).abs() > 0.05 || c.verdict != a.verdict {
+            changed += 1;
+        }
+        db::set_assessment(&state.pool, c.id, &a, &tier).await?;
+    }
+
+    tracing::info!(rows = rows.len(), changed, "board re-scored against the profile");
+    Ok(changed)
 }

@@ -212,8 +212,16 @@ pub(crate) async fn store_resume(
         .map_err(|e| format!("Couldn't save: {e}"))?;
 
     let resume = s.resume.clone();
-    st.set_settings(s).await;
+    st.set_settings(s.clone()).await;
     st.rebuild_resume(&resume).await;
+    // The ATS scores against the profile, so it has to move with the resume —
+    // otherwise a fresh upload changes the similarity score and leaves every
+    // structured comparison reading the old CV.
+    st.rebuild_profile(&s).await;
+    // A new resume changes what every score on the board means.
+    if let Err(e) = crate::pipeline::rescore_all(st).await {
+        tracing::warn!(%e, "re-score after resume upload failed");
+    }
     let m = st.matcher().await;
     match m.resume.as_ref() {
         Some(p) => Ok(format!(

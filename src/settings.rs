@@ -49,6 +49,14 @@ pub struct Settings {
     /// in. This is the gate that asks.
     #[serde(default)]
     pub stack: Vec<String>,
+    /// Your total professional experience, in years.
+    ///
+    /// Typed rather than extracted, because you know it exactly and no parse of
+    /// a resume beats being told. The ATS leans on this harder than on anything
+    /// else: it is what separates a role you could get from one that will not
+    /// reply, and the scorer had no concept of it at all until now.
+    #[serde(default)]
+    pub years_experience: Option<i64>,
     /// "off" | "prefer" | "require", mirroring `location_policy`.
     ///
     /// "prefer" penalises a post that names only languages you don't write,
@@ -215,6 +223,7 @@ impl Settings {
             allow_unknown_location: true,
             seniority: c.profile.seniority.clone(),
             stack: Vec::new(),
+            years_experience: None,
             stack_policy: def_stack_policy(),
             dealbreakers: c.profile.dealbreakers.clone(),
             min_salary: c.profile.min_salary,
@@ -373,6 +382,9 @@ impl Settings {
         self.workday_sites.retain(|w| !w.is_empty());
         self.workday_sites.dedup();
         self.workday_lookback_days = self.workday_lookback_days.clamp(1, 120);
+        // A career longer than this is a parse error or a typo, and either way
+        // it would make every posting look like a step down.
+        self.years_experience = self.years_experience.filter(|y| (0..=50).contains(y));
 
         self.linkedin_queries
             .retain(|q| !q.keywords.trim().is_empty());

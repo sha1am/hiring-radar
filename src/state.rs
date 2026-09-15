@@ -27,6 +27,9 @@ pub struct AppState {
     pub matcher: Arc<RwLock<Arc<Matcher>>>,
     /// What each source is doing, so an empty board can explain itself.
     pub status: Arc<RwLock<Status>>,
+    /// The candidate, as structured facts. Derived from the resume once at
+    /// upload rather than per posting — it does not change between postings.
+    pub profile: Arc<RwLock<Arc<crate::ats::Profile>>>,
 }
 
 impl AppState {
@@ -56,6 +59,21 @@ impl AppState {
 
     pub async fn status_snapshot(&self) -> Status {
         self.status.read().await.clone()
+    }
+
+    pub async fn profile(&self) -> Arc<crate::ats::Profile> {
+        self.profile.read().await.clone()
+    }
+
+    /// Re-read the resume into a profile. Called wherever the resume or the
+    /// stated years change, so the two can never disagree.
+    pub async fn rebuild_profile(&self, s: &Settings) {
+        let p = crate::ats::Profile::from_resume(&s.resume, s.years_experience);
+        tracing::info!(
+            years = ?p.years, level = ?p.level, roles = ?p.roles, stack = p.stack.len(),
+            "candidate profile rebuilt"
+        );
+        *self.profile.write().await = Arc::new(p);
     }
 
     pub async fn matcher(&self) -> Arc<Matcher> {

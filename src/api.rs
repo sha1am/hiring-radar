@@ -47,6 +47,29 @@ pub fn routes() -> Router<AppState> {
             post(resume_upload).layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)),
         )
         .route("/api/settings/resume/clear", post(resume_clear))
+        .route("/api/logs", get(logs).delete(clear_logs))
+}
+
+/// Recent warnings and errors, and the same thing as plain text.
+///
+/// The text form exists so "send me your logs" is one click rather than a
+/// chore — what lands in a report is then formatted identically every time,
+/// rather than being whatever the client felt like rendering.
+async fn logs(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let limit = q
+        .get("limit")
+        .and_then(|l| l.parse::<usize>().ok())
+        .unwrap_or(120)
+        .clamp(1, 300);
+    Json(serde_json::json!({
+        "entries": crate::errlog::recent(limit),
+        "text": crate::errlog::as_text(limit),
+    }))
+}
+
+async fn clear_logs() -> impl IntoResponse {
+    crate::errlog::clear();
+    Json(serde_json::json!({"cleared": true}))
 }
 
 /// Upload a resume — PDF, plain text, or pasted.
@@ -92,6 +115,10 @@ async fn resume_clear(State(st): State<AppState>) -> impl IntoResponse {
     let _ = db::save_settings(&st.pool, &s).await;
     st.set_settings(s.clone()).await;
     st.rebuild_resume("").await;
+    st.rebuild_profile(&s).await;
+    if let Err(e) = crate::pipeline::rescore_all(&st).await {
+        tracing::warn!(%e, "re-score after resume clear failed");
+    }
     st.notify_ui();
     Json(serde_json::json!({
         "ok": true,
@@ -148,6 +175,18 @@ pub struct CardDto {
     pub work_mode: Option<String>,
     pub employment: Option<String>,
     pub region: Option<String>,
+
+    // ---- the ATS assessment (see ats.rs) ----
+    /// apply | stretch | reach | skip — advice, not just a number.
+    pub verdict: Option<String>,
+    /// One sentence naming the dimension that decided the score.
+    pub reason: Option<String>,
+    /// What the posting wanted that you don't have. The output a candidate
+    /// needs and no real ATS ever gives them.
+    pub missing: Vec<String>,
+    /// The per-dimension breakdown, so the score can show its working rather
+    /// than asking to be trusted.
+    pub dimensions: Vec<serde_json::Value>,
     /// False while the model still has this row queued.
     pub enriched: bool,
 }
@@ -189,6 +228,14 @@ impl CardDto {
             work_mode: c.work_mode.clone(),
             employment: c.employment.clone(),
             region: c.region.clone(),
+            verdict: c.verdict.clone(),
+            reason: c.reason.clone(),
+            missing: c.missing.as_deref().map(crate::tags::decode).unwrap_or_default(),
+            dimensions: c
+                .dimensions
+                .as_deref()
+                .and_then(|d| serde_json::from_str(d).ok())
+                .unwrap_or_default(),
             enriched: c.enriched_at.is_some(),
         }
     }
@@ -245,6 +292,11 @@ pub struct RadarPage {
     /// a "gulf" chip with nothing behind it is a filter that can only
     /// disappoint.
     pub regions: Vec<Facet>,
+    pub verdicts: Vec<Facet>,
+    /// What this board keeps asking for that you don't have, most frequent
+    /// first. Aggregated from every assessment: not "you were rejected" but
+    /// "this is the thing that keeps rejecting you".
+    pub gaps: Vec<Facet>,
     /// Echoed back so the client renders the control from what the server
     /// actually applied, not from what it asked for — a typo'd sort silently
     /// falling back to newest while the button still reads "score" is the kind
@@ -319,6 +371,11 @@ pub struct SettingsDto {
     pub company_lists: Vec<CompanyListDto>,
     pub has_resume: bool,
     pub resume_chars: usize,
+    /// What the resume was actually read as. Shown on the settings page because
+    /// the ATS scores against this and not against the PDF — if it read you as
+    /// a frontend engineer with two years, every score on the board is wrong
+    /// and you would otherwise have no way to find out.
+    pub profile: crate::ats::Profile,
 }
 
 #[derive(Serialize, Debug)]
@@ -426,6 +483,14 @@ async fn put_settings(
     // set_settings syncs the status view first, so the dashboard never shows a
     // source as live-and-failing in the instant it was switched off.
     st.set_settings(incoming.clone()).await;
+    // years_experience lives in settings but feeds the profile, so a save has
+    // to move it across or the ATS keeps scoring against the old number.
+    st.rebuild_profile(&incoming).await;
+    // The score means something different now, so the board is brought onto
+    // the new scale rather than left holding two.
+    if let Err(e) = crate::pipeline::rescore_all(&st).await {
+        tracing::warn!(%e, "re-score after settings save failed");
+    }
     st.notify_ui();
     Json(settings_dto(&incoming)).into_response()
 }
@@ -554,6 +619,7 @@ fn filter_from(q: &HashMap<String, String>) -> db::RadarFilter {
         levels: list("levels"),
         work_modes: list("modes"),
         regions: list("regions"),
+        verdicts: list("verdicts"),
         // "I have N years" -> show me anything asking for at most N.
         years_max_wanted: num("yrs_have"),
         // "at least N years of seniority" -> anything whose ceiling reaches N.
@@ -616,6 +682,13 @@ async fn radar_page(st: &AppState, hours: i64, q: &HashMap<String, String>) -> R
         levels: fact_facets(st, "level", window).await,
         work_modes: fact_facets(st, "work_mode", window).await,
         regions: fact_facets(st, "region", window).await,
+        verdicts: fact_facets(st, "verdict", window).await,
+        gaps: db::common_gaps(&st.pool, window, 8)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(v, count)| Facet { label: v.clone(), value: v, count: Some(count) })
+            .collect(),
         // Only meaningful when something is actually going to read them. With
         // no model configured these rows stay NULL forever, and a caption
         // promising they'll sharpen would be a lie that never resolves.
@@ -710,6 +783,7 @@ async fn status_dto(st: &AppState, hours: i64) -> StatusDto {
 }
 
 fn settings_dto(live: &Settings) -> SettingsDto {
+    let profile = crate::ats::Profile::from_resume(&live.resume, live.years_experience);
     use crate::sources::common::companies;
     let lists = [
         ("greenhouse", &live.greenhouse_boards),
@@ -730,6 +804,7 @@ fn settings_dto(live: &Settings) -> SettingsDto {
     .collect();
 
     SettingsDto {
+        profile,
         company_lists: lists,
         has_resume: live.has_resume(),
         resume_chars: live.resume.len(),
@@ -773,6 +848,10 @@ mod tests {
             work_mode: Some("hybrid".into()),
             employment: Some("full-time".into()),
             region: Some("india".into()),
+            verdict: Some("apply".into()),
+            reason: Some("Meets what it asks for.".into()),
+            missing: None,
+            dimensions: None,
             enriched_at: None,
         }
     }

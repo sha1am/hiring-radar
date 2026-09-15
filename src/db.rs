@@ -97,6 +97,14 @@ const MIGRATIONS: &[&str] = &[
     // NULL means the location could not be resolved, which is its own case and
     // never means "somewhere else".
     "ALTER TABLE candidates ADD COLUMN region TEXT",
+    // The ATS assessment (see ats.rs). Stored rather than recomputed so the
+    // number the release engine acted on is the number the dashboard shows.
+    "ALTER TABLE candidates ADD COLUMN verdict TEXT",
+    "ALTER TABLE candidates ADD COLUMN reason TEXT",
+    // Comma-delimited with leading and trailing commas, like tags, so a SQL
+    // containment test cannot prefix-match.
+    "ALTER TABLE candidates ADD COLUMN missing TEXT",
+    "ALTER TABLE candidates ADD COLUMN dimensions TEXT",
     "CREATE INDEX IF NOT EXISTS idx_candidates_unenriched ON candidates(enriched_at) WHERE enriched_at IS NULL",
 ];
 
@@ -269,6 +277,11 @@ pub struct NewCandidate {
     pub work_mode: Option<String>,
     pub employment: Option<String>,
     pub region: Option<String>,
+    /// The ATS assessment at ingest. The LLM pass may sharpen it later.
+    pub verdict: Option<String>,
+    pub reason: Option<String>,
+    pub missing: Option<String>,
+    pub dimensions: Option<String>,
 }
 
 /// `status` is 'scored' for live detections and 'backfilled' for the first
@@ -285,8 +298,9 @@ pub async fn insert_candidate(
          (urn, source, url, title, company, location, body, score, priority, tier, status,
           detected_at, posted_at, expires_at, settle_until, apply_kind, apply_target,
           draft_subject, draft_body, match_terms, tags,
-          role, level, years_min, years_max, work_mode, employment, region)
-         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?)
+          role, level, years_min, years_max, work_mode, employment, region,
+          verdict, reason, missing, dimensions)
+         VALUES (?,?,?,?,?,?,?,?,?,?, ?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?)
          ON CONFLICT(urn) DO NOTHING",
     )
     .bind(&c.urn)
@@ -317,6 +331,10 @@ pub async fn insert_candidate(
     .bind(&c.work_mode)
     .bind(&c.employment)
     .bind(&c.region)
+    .bind(&c.verdict)
+    .bind(&c.reason)
+    .bind(&c.missing)
+    .bind(&c.dimensions)
     .execute(pool)
     .await?;
     Ok(())
@@ -397,6 +415,7 @@ pub struct RadarFilter {
     pub levels: Vec<String>,
     pub work_modes: Vec<String>,
     pub regions: Vec<String>,
+    pub verdicts: Vec<String>,
     /// "how much experience are they asking for" as a band you can sit inside.
     /// A listing with no stated years passes both, because filtering it out
     /// would be filtering on how the description was written.
@@ -505,6 +524,7 @@ pub async fn recent_filtered(
     let level_clause = in_clause("level", &f.levels);
     let mode_clause = in_clause("work_mode", &f.work_modes);
     let region_clause = in_clause("region", &f.regions);
+    let verdict_clause = in_clause("verdict", &f.verdicts);
 
     // A listing that states no years passes either bound. Dropping those would
     // be filtering on how the description was written, not on the job.
@@ -532,7 +552,7 @@ pub async fn recent_filtered(
               OR lower(COALESCE(location, '')) LIKE ?
               OR lower(COALESCE(match_terms, '')) LIKE ?
            ))
-         {tag_clause}{role_clause}{level_clause}{mode_clause}{region_clause}{years_clause}
+         {tag_clause}{role_clause}{level_clause}{mode_clause}{region_clause}{verdict_clause}{years_clause}
          ORDER BY {order}
          LIMIT ?",
         order = f.sort.clause()
@@ -557,7 +577,7 @@ pub async fn recent_filtered(
         query = query.bind(crate::tags::needle(t));
     }
     // Bound in the same order the clauses were appended above.
-    for v in f.roles.iter().chain(&f.levels).chain(&f.work_modes).chain(&f.regions) {
+    for v in f.roles.iter().chain(&f.levels).chain(&f.work_modes).chain(&f.regions).chain(&f.verdicts) {
         query = query.bind(v.clone());
     }
     if let Some(n) = f.years_max_wanted {
@@ -852,7 +872,7 @@ pub async fn fact_facets(
     column: &str,
     window_secs: i64,
 ) -> anyhow::Result<Vec<(String, i64)>> {
-    const ALLOWED: &[&str] = &["role", "level", "work_mode", "employment", "region"];
+    const ALLOWED: &[&str] = &["role", "level", "work_mode", "employment", "region", "verdict"];
     if !ALLOWED.contains(&column) {
         anyhow::bail!("not a facetable column: {column}");
     }
@@ -896,4 +916,84 @@ pub async fn backfill_regions(pool: &SqlitePool) -> anyhow::Result<u64> {
         filled += 1;
     }
     Ok(filled)
+}
+
+/// What the board says you are most often missing.
+///
+/// Every assessment records the requirements a posting wanted that you do not
+/// have. Across a few hundred postings those aggregate into the one output a
+/// job seeker never gets from an ATS: not "you were rejected" but "this is the
+/// thing that keeps rejecting you".
+///
+/// Only genuinely actionable rows count — a posting you already dismissed or
+/// applied to is not telling you anything about what to learn next.
+pub async fn common_gaps(pool: &SqlitePool, window_secs: i64, limit: usize) -> anyhow::Result<Vec<(String, i64)>> {
+    let cutoff = now() - window_secs;
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT missing FROM candidates
+         WHERE COALESCE(posted_at, detected_at) > ?
+           AND COALESCE(missing, '') != ''
+           AND status NOT IN ('dismissed', 'applied', 'sent', 'expired')",
+    )
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await?;
+
+    let mut tally: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for (raw,) in rows {
+        for item in crate::tags::decode(&raw) {
+            // "2 more years" is a fact about one posting, not a gap you can go
+            // and close, so it never becomes advice.
+            if item.contains("year") || item.contains("level") || item.contains("background") {
+                continue;
+            }
+            *tally.entry(item).or_default() += 1;
+        }
+    }
+
+    let mut out: Vec<(String, i64)> = tally.into_iter().collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    out.truncate(limit);
+    Ok(out)
+}
+
+/// Rewrite one row's assessment — used when the LLM pass sharpens the facts a
+/// posting was originally scored from.
+pub async fn set_assessment(
+    pool: &SqlitePool,
+    id: i64,
+    a: &crate::ats::Assessment,
+    tier: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE candidates
+         SET score = ?, tier = ?, verdict = ?, reason = ?, missing = ?, dimensions = ?
+         WHERE id = ?",
+    )
+    .bind(a.score)
+    .bind(tier)
+    .bind(&a.verdict)
+    .bind(&a.reason)
+    .bind(crate::tags::encode(&a.missing))
+    .bind(serde_json::to_string(&a.dimensions).ok())
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Every stored candidate, for a re-score.
+///
+/// Bounded by the prune window rather than by a limit: a partial re-score is
+/// worse than none, because the board would then hold two populations scored
+/// against different profiles and no way to tell them apart.
+pub async fn all_scorable(pool: &SqlitePool) -> anyhow::Result<Vec<Candidate>> {
+    let rows = sqlx::query_as::<_, Candidate>(
+        "SELECT * FROM candidates
+         WHERE status NOT IN ('sent', 'applied', 'dismissed')
+         ORDER BY COALESCE(posted_at, detected_at) DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }

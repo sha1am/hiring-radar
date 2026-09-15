@@ -1,9 +1,11 @@
 mod api;
+mod ats;
 mod classify;
 mod config;
 mod db;
 mod draft;
 mod enrich;
+mod errlog;
 mod geo;
 mod model;
 mod notify;
@@ -35,12 +37,22 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "hiring_radar=info,tower_http=warn".into()),
-        )
-        .init();
+    // Two sinks: stdout as before, and an in-memory ring buffer of warnings and
+    // errors that the dashboard can show and copy. `docker compose logs` has
+    // all of this already and is the wrong place to send someone — the six
+    // lines that matter are scattered through thousands that don't.
+    {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "hiring_radar=info,tower_http=warn".into()),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .with(errlog::CaptureLayer)
+            .init();
+    }
 
     let cfg_path = std::env::var("RADAR_CONFIG").unwrap_or_else(|_| "config.toml".into());
     let cfg = Arc::new(Config::load(&cfg_path)?);
@@ -53,7 +65,17 @@ async fn main() -> anyhow::Result<()> {
 
     let http = reqwest::Client::builder()
         .user_agent(cfg.crawl.user_agent.clone())
-        .timeout(Duration::from_secs(30))
+        // 30s was not enough. Stripe and GitLab publish hundreds of jobs with
+        // full descriptions in one response, and the body stopped arriving
+        // mid-parse — which surfaced as "unreadable response" and read like a
+        // schema change. Overridable because what is generous on a good
+        // connection is still short on a bad one.
+        .timeout(Duration::from_secs(
+            std::env::var("RADAR_HTTP_TIMEOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(90),
+        ))
         .build()?;
 
     let drafter: Arc<dyn draft::Drafter> = Arc::from(draft::build_drafter(&cfg.draft, http.clone()));
@@ -91,6 +113,9 @@ async fn main() -> anyhow::Result<()> {
         "matcher ready"
     );
 
+    // The profile is derived from the resume; keep a copy of the settings
+    // before they move into the lock.
+    let live_for_profile = live.clone();
     let state = AppState {
         pool: pool.clone(),
         cfg: cfg.clone(),
@@ -101,6 +126,9 @@ async fn main() -> anyhow::Result<()> {
         settings: Arc::new(tokio::sync::RwLock::new(Arc::new(live))),
         matcher: Arc::new(tokio::sync::RwLock::new(Arc::new(matcher))),
         status: Arc::new(tokio::sync::RwLock::new(status::Status::new())),
+        profile: Arc::new(tokio::sync::RwLock::new(Arc::new(
+            ats::Profile::from_resume(&live_for_profile.resume, live_for_profile.years_experience),
+        ))),
     };
     // Seed the status with which sources are on, so the panel is accurate
     // before the first crawl rather than showing three unknown rows.

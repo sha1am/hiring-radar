@@ -179,6 +179,15 @@ pub struct Candidate {
     /// Coarse geography — see `geo::REGIONS`. NULL when the location could not
     /// be resolved, which is never the same as "somewhere else".
     pub region: Option<String>,
+    // ---- the ATS assessment (see ats.rs) ----
+    // Stored rather than recomputed, so the number the release engine acted on
+    // is the number the dashboard shows.
+    pub verdict: Option<String>,
+    pub reason: Option<String>,
+    pub missing: Option<String>,
+    /// The per-dimension breakdown, as JSON. Kept so the score can show its
+    /// working rather than asking to be trusted.
+    pub dimensions: Option<String>,
     /// NULL until the LLM pass has read this row. Doubles as the work queue.
     pub enriched_at: Option<i64>,
 }
