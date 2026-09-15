@@ -1,5 +1,5 @@
-import { useState } from 'react'
 import type { Level, Source, Status } from '../types'
+import { Heading } from '../ui'
 
 /// The panel that answers "why is this empty".
 ///
@@ -8,11 +8,11 @@ import type { Level, Source, Status } from '../types'
 /// everything scoring below the floor. Reading container logs to tell them
 /// apart defeats the point of having a dashboard, so the state is on the page.
 
-const BANNER: Record<Level, { ring: string; icon: string }> = {
-  ok: { ring: 'bg-emerald-500/10 ring-emerald-500/30 text-emerald-300', icon: '✓' },
-  info: { ring: 'bg-sky-500/10 ring-sky-500/30 text-sky-300', icon: '…' },
-  warn: { ring: 'bg-amber-500/10 ring-amber-500/30 text-amber-300', icon: '!' },
-  error: { ring: 'bg-rose-500/10 ring-rose-500/30 text-rose-300', icon: '×' },
+const BANNER: Record<Level, string> = {
+  ok: 'bg-emerald-500/10 text-emerald-200 ring-emerald-500/20',
+  info: 'bg-sky-500/10 text-sky-200 ring-sky-500/20',
+  warn: 'bg-amber-500/10 text-amber-200 ring-amber-500/20',
+  error: 'bg-rose-500/10 text-rose-200 ring-rose-500/20',
 }
 
 function since(ts: number | null): string {
@@ -32,7 +32,20 @@ function until(ts: number | null): string {
   return `in ${Math.floor(s / 3600)}h`
 }
 
-function SourceRow({ s }: { s: Source }) {
+/// Last cycle, in the terms that explain an empty board — and only the terms
+/// that are non-zero. A row of "0 below floor · 0 wrong location · 0 not
+/// hiring" is four numbers you have to read to learn nothing.
+function counters(s: Source): string {
+  const parts = [`${s.fetched} fetched`, `${s.stored} kept`]
+  if (s.below_floor > 0) parts.push(`${s.below_floor} below floor`)
+  if (s.wrong_location > 0) parts.push(`${s.wrong_location} wrong place`)
+  if (s.wrong_stack > 0) parts.push(`${s.wrong_stack} wrong stack`)
+  if (s.not_hiring > 0) parts.push(`${s.not_hiring} not hiring`)
+  if (s.best_score > 0) parts.push(`best ${s.best_score}`)
+  return parts.join(' · ')
+}
+
+function SourceCard({ s }: { s: Source }) {
   const dot = !s.enabled
     ? 'bg-slate-700'
     : s.last_error
@@ -49,72 +62,83 @@ function SourceRow({ s }: { s: Source }) {
         ? `${since(s.last_run)}${s.next_run ? ` · next ${until(s.next_run)}` : ''}`
         : 'waiting for first crawl'
 
+  const failures = s.notes.filter((n) => !n.ok)
+  const ok = s.notes.filter((n) => n.ok)
+
   return (
-    <li className="py-1.5">
+    <div className="rounded-lg bg-slate-900/40 p-3 ring-1 ring-slate-800/80">
       <div className="flex items-center gap-2">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-        <span className="text-slate-300">{s.label}</span>
-        <span className="text-xs text-slate-500">{when}</span>
+        <span className="text-sm text-slate-200">{s.label}</span>
+        <span className="text-xs text-slate-600">{when}</span>
       </div>
 
       {s.enabled && s.last_run !== null && (
-        <p className="ml-3.5 text-xs text-slate-500">
-          {s.fetched} fetched · {s.new_posts} new · {s.stored} kept
-          {s.below_floor > 0 && ` · ${s.below_floor} below floor`}
-          {s.wrong_location > 0 && ` · ${s.wrong_location} wrong location`}
-          {s.wrong_stack > 0 && ` · ${s.wrong_stack} wrong stack`}
-          {s.not_hiring > 0 && ` · ${s.not_hiring} not hiring`}
-          {s.best_score > 0 && ` · best ${s.best_score}`}
-        </p>
+        <p className="mt-1 text-xs text-slate-500">{counters(s)}</p>
       )}
 
-      {/* Per-target notes are the line that identifies a mistyped board token,
-          which is otherwise a completely silent failure. */}
-      {s.notes.length > 0 && (
-        <ul className="ml-3.5 mt-0.5 space-y-0.5">
-          {s.notes.map((n, i) => (
-            <li key={i} className={`text-xs ${n.ok ? 'text-slate-600' : 'text-rose-400/90'}`}>
-              {n.ok ? '·' : '×'} {n.text}
+      {s.last_error && <p className="mt-2 text-xs text-rose-300/90">{s.last_error}</p>}
+
+      {/* Failures first and in full — this is the line that identifies a
+          mistyped board token, which is otherwise completely silent. The
+          successes are folded away: forty "stripe: 12 jobs" lines are noise
+          until the one that says 404 is buried among them. */}
+      {failures.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {failures.map((n, i) => (
+            <li key={i} className="text-xs leading-relaxed text-rose-300/90">
+              {n.text}
             </li>
           ))}
         </ul>
       )}
 
-      {s.last_error && <p className="ml-3.5 text-xs text-rose-400/90">× {s.last_error}</p>}
-    </li>
+      {ok.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-slate-600 hover:text-slate-400">
+            {ok.length} target{ok.length === 1 ? '' : 's'} fine
+          </summary>
+          <ul className="mt-1 space-y-0.5">
+            {ok.map((n, i) => (
+              <li key={i} className="font-mono text-[11px] text-slate-600">
+                {n.text}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
   )
 }
 
 export function StatusPanel({ status }: { status: Status }) {
-  // Expanded by default: this is its own tab now, and you opened it to see
-  // exactly what the collapsed version was hiding.
-  const [open, setOpen] = useState(true)
-  const b = BANNER[status.level]
-
   return (
-    <section className="space-y-2">
-      <div className={`flex items-start gap-2 rounded-lg px-3 py-2 text-sm ring-1 ${b.ring}`}>
-        <span aria-hidden className="mt-px font-mono">
-          {b.icon}
-        </span>
-        <p className="flex-1">{status.message}</p>
-        <button
-          onClick={() => setOpen(!open)}
-          className="shrink-0 text-xs opacity-70 hover:opacity-100"
-        >
-          {open ? 'hide sources' : 'sources'}
-        </button>
+    <section className="space-y-4">
+      <div className={`rounded-lg px-3 py-2.5 text-xs leading-relaxed ring-1 ${BANNER[status.level]}`}>
+        {status.message}
       </div>
 
-      {open && (
-        <ul className="divide-y divide-slate-800/70 rounded-lg bg-slate-900/40 px-3 py-1 text-sm ring-1 ring-slate-800">
-          {status.sources.length === 0 ? (
-            <li className="py-2 text-xs text-slate-500">Starting up…</li>
-          ) : (
-            status.sources.map((s) => <SourceRow key={s.name} s={s} />)
-          )}
-        </ul>
-      )}
+      <div className="space-y-3">
+        <Heading
+          right={
+            <span className="text-xs text-slate-600">
+              {status.rows_in_window} on the board · last {status.window_hours}h
+            </span>
+          }
+        >
+          Sources
+        </Heading>
+
+        {status.sources.length === 0 ? (
+          <p className="text-xs text-slate-600">Starting up…</p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {status.sources.map((s) => (
+              <SourceCard key={s.name} s={s} />
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   )
 }

@@ -130,8 +130,10 @@ function Check({
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="space-y-3">
-      <h2 className="text-sm uppercase tracking-wide text-slate-400">{title}</h2>
+    <section className="space-y-4 rounded-lg bg-slate-900/30 p-4 ring-1 ring-slate-800/60">
+      <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">
+        {title}
+      </h2>
       {children}
     </section>
   )
@@ -184,7 +186,9 @@ function ResumeBlock({ s, reload }: { s: Settings; reload: () => void }) {
   return (
     <div className="space-y-3 rounded-lg bg-slate-900/40 p-4 ring-1 ring-slate-800">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm uppercase tracking-wide text-slate-400">Resume</h2>
+        <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">
+          Resume
+        </h2>
         {s.has_resume && (
           <button
             onClick={clear}
@@ -289,7 +293,7 @@ export function SettingsPanel() {
   }
 
   return (
-    <div className="space-y-8 pb-16">
+    <div className="space-y-4 pb-16">
       <ResumeBlock s={s} reload={load} />
 
       <Section title="What you're looking for">

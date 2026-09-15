@@ -2,56 +2,127 @@ import { useEffect, useState } from 'react'
 import type { Facet, Filters as F, SortKey } from '../types'
 import { emptyFilters } from '../types'
 import { useDebounced } from '../hooks'
+import { Segmented, inputClass } from '../ui'
 
 /// Two questions that want opposite orderings. "What just landed" is a feed you
 /// read newest-first and stop when you recognise something; "what is worth my
 /// afternoon" is a ranking, where the best match from six hours ago beats a
-/// fresh mediocre one. Offering only one makes the other unanswerable.
+/// fresh mediocre one.
 const SORTS: [SortKey, string, string][] = [
-  ['newest', 'newest', 'Most recently posted first'],
-  ['score', 'best match', 'Highest match score first'],
-  ['oldest', 'oldest', 'Oldest first — for working back through a backlog'],
+  ['newest', 'new', 'Most recently posted first'],
+  ['score', 'best', 'Highest match score first'],
+  ['oldest', 'old', 'Oldest first — for working back through a backlog'],
 ]
 
-const WINDOWS: [number, string][] = [
-  [6, '6h'],
-  [24, '24h'],
-  [72, '3d'],
-  [168, '7d'],
+const WINDOWS: [number, string, string][] = [
+  [6, '6h', 'Posted in the last 6 hours'],
+  [24, '24h', 'Posted in the last day'],
+  [72, '3d', 'Posted in the last 3 days'],
+  [168, '7d', 'Posted in the last week'],
 ]
 
-function Select({
-  value,
-  onChange,
-  options,
-  placeholder,
-}: {
-  value: string
-  onChange: (v: string) => void
-  options: Facet[]
-  placeholder: string
-}) {
+/// The stored keys are terse; these are what a person reads.
+const REGION_LABEL: Record<string, string> = {
+  india: 'India',
+  gulf: 'Gulf',
+  sea: 'SE Asia',
+  apac: 'APAC',
+  europe: 'Europe',
+  americas: 'Americas',
+  other: 'Elsewhere',
+}
+
+/// How many separate things the board is currently narrowed by.
+///
+/// This number is what makes folding the panel safe. A hidden filter you have
+/// forgotten about is how you end up staring at an almost-empty board and
+/// concluding nobody is hiring.
+export function activeCount(f: F): number {
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-xs text-slate-300"
-    >
-      <option value="">{placeholder}</option>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+    (f.q ? 1 : 0) +
+    (f.source ? 1 : 0) +
+    (f.status ? 1 : 0) +
+    (f.tier ? 1 : 0) +
+    (f.min ? 1 : 0) +
+    (f.yrsHave ? 1 : 0) +
+    f.regions.length +
+    f.roles.length +
+    f.levels.length +
+    f.modes.length +
+    f.tags.length
   )
 }
 
+function ChipRow({
+  label,
+  facets,
+  selected,
+  onChange,
+  labelFor,
+  max = 14,
+}: {
+  label: string
+  facets: Facet[]
+  selected: string[]
+  onChange: (v: string[]) => void
+  labelFor?: Record<string, string>
+  max?: number
+}) {
+  if (facets.length === 0) return null
+  const toggle = (v: string) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v])
+
+  return (
+    <div className="grid grid-cols-[3.5rem_1fr] items-start gap-2">
+      <span className="pt-1 text-right text-[10px] uppercase tracking-[0.08em] text-slate-600">
+        {label}
+      </span>
+      <div className="flex flex-wrap gap-1">
+        {facets.slice(0, max).map((f) => {
+          const on = selected.includes(f.value)
+          return (
+            <button
+              key={f.value}
+              onClick={() => toggle(f.value)}
+              aria-pressed={on}
+              className={`rounded-full px-2 py-0.5 text-xs transition-colors ${
+                on
+                  ? 'bg-slate-200 text-slate-900'
+                  : 'bg-slate-800/70 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+              }`}
+            >
+              {labelFor?.[f.value] ?? f.label}
+              {f.count !== null && (
+                <span className={`ml-1 ${on ? 'text-slate-500' : 'text-slate-600'}`}>{f.count}</span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/// The filter bar.
+///
+/// One line stays visible — window, search, ordering — and everything else
+/// folds behind a toggle. There are eleven ways to narrow this board, and
+/// having all eleven on screen meant the list you came to read started halfway
+/// down the page.
+///
+/// Selections within a group OR together; groups AND with each other. "Backend
+/// or SRE, in India or the Gulf" is the question people actually ask, and the
+/// intersection of two roles is empty by definition.
 export function FilterBar({
   filters,
   setFilters,
   sources,
   statuses,
+  regions,
+  roles,
+  levels,
+  workModes,
+  tags,
   shown,
   total,
 }: {
@@ -59,11 +130,14 @@ export function FilterBar({
   setFilters: (f: F) => void
   sources: Facet[]
   statuses: Facet[]
+  regions: Facet[]
+  roles: Facet[]
+  levels: Facet[]
+  workModes: Facet[]
+  tags: Facet[]
   shown: number
   total: number
 }) {
-  // The search box is local state debounced into the filters, so typing feels
-  // instant and doesn't fire a request per keystroke.
   const [q, setQ] = useState(filters.q)
   const debounced = useDebounced(q)
   useEffect(() => {
@@ -72,223 +146,168 @@ export function FilterBar({
   }, [debounced])
   useEffect(() => setQ(filters.q), [filters.q])
 
-  const active =
-    filters.q ||
-    filters.source ||
-    filters.status ||
-    filters.tier ||
-    filters.min ||
-    filters.yrsHave ||
-    filters.tags.length ||
-    filters.regions.length ||
-    filters.roles.length ||
-    filters.levels.length ||
-    filters.modes.length
+  const n = activeCount(filters)
+  // Open when something is already narrowing the board — usually a reload of a
+  // filtered URL, where a collapsed panel would hide why the list is short.
+  const [open, setOpen] = useState(n > 0)
+
+  const set = (patch: Partial<F>) => setFilters({ ...filters, ...patch })
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex overflow-hidden rounded-md ring-1 ring-slate-700">
-          {WINDOWS.map(([h, label]) => (
-            <button
-              key={h}
-              onClick={() => setFilters({ ...filters, hours: h })}
-              className={`px-2 py-1 text-xs ${
-                filters.hours === h
-                  ? 'bg-slate-700 text-slate-100'
-                  : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <Segmented options={WINDOWS} value={filters.hours} onChange={(hours) => set({ hours })} />
 
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="search title, company, location…"
-          className="min-w-[10rem] flex-1 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-xs text-slate-200 placeholder:text-slate-600"
+          placeholder="Search titles, companies, places…"
+          className={`${inputClass} min-w-[12rem] flex-1`}
         />
 
-        <Select
-          value={filters.source}
-          onChange={(v) => setFilters({ ...filters, source: v })}
-          options={sources}
-          placeholder="any source"
-        />
-        <Select
-          value={filters.status}
-          onChange={(v) => setFilters({ ...filters, status: v })}
-          options={statuses}
-          placeholder="any status"
-        />
-        <Select
-          value={filters.tier}
-          onChange={(v) => setFilters({ ...filters, tier: v })}
-          options={[
-            { value: 'exceptional', label: 'exceptional', count: null },
-            { value: 'strong', label: 'strong', count: null },
-            { value: 'marginal', label: 'marginal', count: null },
-          ]}
-          placeholder="any tier"
-        />
-        <input
-          type="number"
-          value={filters.min}
-          onChange={(e) => setFilters({ ...filters, min: e.target.value })}
-          placeholder="min"
-          title="Minimum match score"
-          className="w-16 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-xs text-slate-200 placeholder:text-slate-600"
-        />
+        <Segmented options={SORTS} value={filters.sort} onChange={(sort) => set({ sort })} />
 
-        {/* Phrased as what you have, not what the job wants — you know your own
-            number, and a listing that states no years passes either way rather
-            than being filtered out for how it was written. */}
-        <input
-          type="number"
-          value={filters.yrsHave}
-          onChange={(e) => setFilters({ ...filters, yrsHave: e.target.value })}
-          placeholder="yrs"
-          title="Your years of experience — hides roles asking for more"
-          className="w-16 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1 text-xs text-slate-200 placeholder:text-slate-600"
-        />
-
-        <div className="flex overflow-hidden rounded-md ring-1 ring-slate-700">
-          {SORTS.map(([key, label, title]) => (
-            <button
-              key={key}
-              onClick={() => setFilters({ ...filters, sort: key })}
-              title={title}
-              aria-pressed={filters.sort === key}
-              className={`px-2 py-1 text-xs ${
-                filters.sort === key
-                  ? 'bg-slate-700 text-slate-100'
-                  : 'bg-slate-900/60 text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {active ? (
-          <button
-            // Clears the filters, keeps the window and the ordering: those are
-            // how you're reading the board, not what you're looking for.
-            onClick={() => setFilters({ ...emptyFilters(filters.hours), sort: filters.sort })}
-            className="text-xs text-slate-500 hover:text-slate-300"
-          >
-            clear
-          </button>
-        ) : null}
+        <button
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+            n > 0
+              ? 'bg-slate-200 text-slate-900'
+              : 'text-slate-400 ring-1 ring-slate-800 hover:text-slate-100'
+          }`}
+        >
+          Filters
+          {n > 0 && (
+            <span className="rounded-full bg-slate-900/20 px-1.5 text-[10px]">{n}</span>
+          )}
+          <span aria-hidden className="text-[9px] opacity-60">
+            {open ? '▲' : '▼'}
+          </span>
+        </button>
       </div>
 
-      <p className="text-xs text-slate-600">
-        {active ? `${shown} of ${total}` : `${total}`} in the last {filters.hours}h
-      </p>
-    </div>
-  )
-}
+      {open && (
+        <div className="space-y-2.5 rounded-lg bg-slate-900/40 p-3 ring-1 ring-slate-800/80">
+          {/* Region first: the coarsest cut, and the one you make before you
+              care what the role is. */}
+          <ChipRow
+            label="where"
+            facets={regions}
+            selected={filters.regions}
+            onChange={(regions) => set({ regions })}
+            labelFor={REGION_LABEL}
+          />
+          <ChipRow
+            label="role"
+            facets={roles}
+            selected={filters.roles}
+            onChange={(roles) => set({ roles })}
+          />
+          <ChipRow
+            label="level"
+            facets={levels}
+            selected={filters.levels}
+            onChange={(levels) => set({ levels })}
+          />
+          <ChipRow
+            label="setup"
+            facets={workModes}
+            selected={filters.modes}
+            onChange={(modes) => set({ modes })}
+          />
+          <ChipRow
+            label="stack"
+            facets={tags}
+            selected={filters.tags}
+            onChange={(tags) => set({ tags })}
+            max={20}
+          />
 
-/// A row of toggleable chips backed by one multi-select filter key.
-///
-/// Same rule as the tech chips and for the same reason: selections OR together.
-/// Picking "backend" and "sre" means either, because the intersection of two
-/// roles is by definition empty and a filter that can only return nothing is
-/// not a filter.
-export function FacetChips({
-  label,
-  facets,
-  selected,
-  onChange,
-  max = 12,
-  labelFor,
-}: {
-  label: string
-  facets: Facet[]
-  selected: string[]
-  onChange: (v: string[]) => void
-  max?: number
-  /// Prettier names for terse stored keys, e.g. sea -> "SE Asia". Falls back to
-  /// the server's label, so a key this map hasn't heard of still renders.
-  labelFor?: Record<string, string>
-}) {
-  if (facets.length === 0) return null
-  const toggle = (v: string) =>
-    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v])
+          <div className="grid grid-cols-[3.5rem_1fr] items-start gap-2 border-t border-slate-800/60 pt-2.5">
+            <span className="pt-1.5 text-right text-[10px] uppercase tracking-[0.08em] text-slate-600">
+              more
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={filters.source}
+                onChange={(e) => set({ source: e.target.value })}
+                className={inputClass}
+              >
+                <option value="">any source</option>
+                {sources.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={filters.status}
+                onChange={(e) => set({ status: e.target.value })}
+                className={inputClass}
+              >
+                <option value="">any status</option>
+                {statuses.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={filters.tier}
+                onChange={(e) => set({ tier: e.target.value })}
+                className={inputClass}
+              >
+                <option value="">any tier</option>
+                <option value="exceptional">exceptional</option>
+                <option value="strong">strong</option>
+                <option value="marginal">marginal</option>
+              </select>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                score ≥
+                <input
+                  type="number"
+                  value={filters.min}
+                  onChange={(e) => set({ min: e.target.value })}
+                  className={`${inputClass} w-16`}
+                />
+              </label>
+              {/* Phrased as what you have, not what the job wants — you know
+                  your own number, and a listing stating no years passes either
+                  way rather than being filtered out for how it was written. */}
+              <label
+                className="flex items-center gap-1.5 text-xs text-slate-500"
+                title="Hides roles asking for more experience than you have"
+              >
+                I have
+                <input
+                  type="number"
+                  value={filters.yrsHave}
+                  onChange={(e) => set({ yrsHave: e.target.value })}
+                  className={`${inputClass} w-14`}
+                />
+                yrs
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
 
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-[10px] uppercase tracking-wide text-slate-600">{label}</span>
-      {facets.slice(0, max).map((f) => {
-        const on = selected.includes(f.value)
-        return (
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-slate-600">
+          <span className="text-slate-400">{n > 0 ? shown : total}</span>
+          {n > 0 && ` of ${total}`} in the last {filters.hours}h
+        </p>
+        {n > 0 && (
           <button
-            key={f.value}
-            onClick={() => toggle(f.value)}
-            aria-pressed={on}
-            className={`rounded-full px-2 py-0.5 text-xs ring-1 transition-colors ${
-              on
-                ? 'bg-violet-500/20 text-violet-200 ring-violet-500/40'
-                : 'bg-slate-800/60 text-slate-400 ring-slate-700/60 hover:text-slate-200'
-            }`}
+            // Clears what you're looking for. Keeps the window and the ordering,
+            // which are how you're reading the board, not what you're after.
+            onClick={() => setFilters({ ...emptyFilters(filters.hours), sort: filters.sort })}
+            className="text-xs text-slate-500 hover:text-slate-200"
           >
-            {labelFor?.[f.value] ?? f.label}
-            {f.count !== null && <span className="ml-1 opacity-60">{f.count}</span>}
+            Clear filters
           </button>
-        )
-      })}
-    </div>
-  )
-}
-
-/// Toggleable technology chips.
-///
-/// The search box already accepts "golang", but typing is the wrong interface
-/// for scanning: you want to flip between Go and Go-or-Rust without composing a
-/// query. Selected chips OR together — chips are a net for scanning, not a
-/// sieve, so picking two widens the board rather than narrowing it to the
-/// intersection, which would almost always be empty.
-export function TagChips({
-  filters,
-  setFilters,
-  tags,
-}: {
-  filters: F
-  setFilters: (f: F) => void
-  tags: Facet[]
-}) {
-  if (tags.length === 0) return null
-
-  const toggle = (t: string) => {
-    const on = filters.tags.includes(t)
-    setFilters({
-      ...filters,
-      tags: on ? filters.tags.filter((x) => x !== t) : [...filters.tags, t],
-    })
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {tags.slice(0, 24).map((t) => {
-        const on = filters.tags.includes(t.value)
-        return (
-          <button
-            key={t.value}
-            onClick={() => toggle(t.value)}
-            aria-pressed={on}
-            className={`rounded-full px-2 py-0.5 text-xs ring-1 transition-colors ${
-              on
-                ? 'bg-sky-500/20 text-sky-200 ring-sky-500/40'
-                : 'bg-slate-800/60 text-slate-400 ring-slate-700/60 hover:text-slate-200'
-            }`}
-          >
-            {t.label}
-            {t.count !== null && <span className="ml-1 opacity-60">{t.count}</span>}
-          </button>
-        )
-      })}
+        )}
+      </div>
     </div>
   )
 }

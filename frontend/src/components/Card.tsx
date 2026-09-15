@@ -1,28 +1,94 @@
 import { useEffect, useState } from 'react'
 import type { Card as CardT } from '../types'
 import { dismissCandidate, markApplied, saveDraft, sendCandidate } from '../api'
+import { Button, Dotted, Score, TIER_ACCENT, inputClass } from '../ui'
 
-const TIER: Record<string, string> = {
-  exceptional: 'bg-rose-500/15 text-rose-300 ring-rose-500/30',
-  strong: 'bg-amber-500/15 text-amber-300 ring-amber-500/30',
-  marginal: 'bg-slate-700/40 text-slate-400 ring-slate-600/40',
+/// What a posting *is*, as a phrase rather than a row of chips.
+///
+/// "senior backend · 5+ yrs · hybrid" reads; five little pills of five
+/// different colours do not. Chips are for clicking — they belong in the filter
+/// bar — and using the same treatment for things you can't click was most of
+/// what made the board feel busy.
+function facts(card: CardT): string | null {
+  const role = [card.level, card.role].filter(Boolean).join(' ')
+  const bits = [role, card.years, card.work_mode, card.employment].filter(Boolean)
+  return bits.length ? bits.join(' · ') : null
 }
 
-/// An actionable card: the post, the draft, and the three things you can do.
+function stack(card: CardT, max = 4): string | null {
+  if (card.tags.length === 0) return null
+  const shown = card.tags.slice(0, max).join(', ')
+  return card.tags.length > max ? `${shown} +${card.tags.length - max}` : shown
+}
+
+/// Statuses worth printing: something was done to this posting. Everything
+/// else is the resting state and says nothing.
+const ACTIONED = ['sent', 'applied', 'dismissed', 'notified', 'expired']
+
+/// One row on the radar.
 ///
-/// The draft is editable before it goes anywhere, and nothing is ever sent
-/// without a click. That is the whole design of the outbox — a tool that mails
-/// strangers on your behalf while you sleep is one bad score away from being
+/// Two lines, both of them scannable: the title at full contrast, everything
+/// else in one muted run. The old version used three lines and two different
+/// chip styles, which meant a hundred rows had no shape at all — every piece of
+/// text was the same size and colour as every other, so nothing stood out and
+/// your eye had nowhere to land.
+///
+/// The tier is a 2px accent bar rather than a coloured pill: rank is a property
+/// of the whole row, and a pill competes with the score for the same job.
+export function RadarRow({ card }: { card: CardT }) {
+  return (
+    <li>
+      <a
+        href={card.url}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="group flex items-stretch gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-slate-900/70"
+      >
+        <span
+          aria-hidden
+          className={`w-0.5 shrink-0 rounded-full ${TIER_ACCENT[card.tier] ?? TIER_ACCENT.marginal}`}
+        />
+
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm text-slate-200 group-hover:text-slate-50">
+            {card.title}
+          </span>
+          <Dotted
+            className="mt-0.5 block"
+            parts={[
+              card.company,
+              card.location,
+              facts(card),
+              stack(card),
+              // Only statuses that mean something happened. "backfilled" and
+              // "scored" are what every untouched row says, so printing them
+              // put the same word on the end of a hundred lines.
+              ACTIONED.includes(card.status) ? card.status : null,
+            ]}
+          />
+        </span>
+
+        <span className="flex shrink-0 flex-col items-end justify-center gap-0.5 pl-2">
+          <Score value={card.score} tier={card.tier} title={`${card.tier} match`} />
+          <span className="whitespace-nowrap text-[11px] text-slate-600">{card.age}</span>
+        </span>
+      </a>
+    </li>
+  )
+}
+
+/// An actionable card: the posting, and the three things you can do about it.
+///
+/// The draft editor is folded away until you ask for it. It used to be a
+/// permanently-open five-row textarea on every card, so ten cards were a wall
+/// of identical grey boxes and you couldn't see the jobs for the drafts.
+/// Nothing is ever sent without a click either way — a tool that mails
+/// strangers on your behalf while you sleep is one bad score from being
 /// mortifying.
-export function Card({
-  card,
-  onChanged,
-}: {
-  card: CardT
-  onChanged: () => void
-}) {
+export function Card({ card, onChanged }: { card: CardT; onChanged: () => void }) {
   const [subject, setSubject] = useState(card.draft_subject ?? '')
   const [body, setBody] = useState(card.draft_body ?? '')
+  const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null)
 
@@ -51,198 +117,131 @@ export function Card({
     }
   }
 
+  const byEmail = card.apply_kind === 'email'
+
   return (
-    <article className="rounded-lg bg-slate-900/50 p-3 ring-1 ring-slate-800">
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
+    <article className="overflow-hidden rounded-lg bg-slate-900/40 ring-1 ring-slate-800/80">
+      {/* The accent runs the full height of the card rather than sitting inside
+          it: rank is a property of the whole posting, and an inner bar reads as
+          a stray artifact floating next to the text. */}
+      <div className="flex items-stretch">
+        <span
+          aria-hidden
+          className={`w-0.5 shrink-0 ${TIER_ACCENT[card.tier] ?? TIER_ACCENT.marginal}`}
+        />
+        <div className="min-w-0 flex-1 p-3">
           <a
             href={card.url}
             target="_blank"
             rel="noreferrer noopener"
-            className="block font-medium text-slate-100 hover:text-sky-300"
+            className="block truncate text-sm font-medium text-slate-100 hover:text-sky-300"
           >
             {card.title}
           </a>
-          <p className="truncate text-xs text-slate-500">
-            {card.company}
-            {card.location && ` · ${card.location}`} · {card.source_label} · {card.age}
-          </p>
+          <Dotted
+            className="mt-0.5 block"
+            parts={[card.company, card.location, facts(card), card.source_label, card.age]}
+          />
+          {stack(card, 8) && (
+            <p className="mt-1 truncate font-mono text-[11px] text-slate-600">{stack(card, 8)}</p>
+          )}
+          {card.why && (
+            <p className="mt-1.5 text-xs text-slate-500">
+              Resume match on <span className="text-slate-400">{card.why}</span>
+            </p>
+          )}
         </div>
-        <span
-          className={`shrink-0 rounded-full px-2 py-0.5 font-mono text-xs ring-1 ${
-            TIER[card.tier] ?? TIER.marginal
-          }`}
-          title={`${card.tier} · live rank ${card.priority}`}
-        >
-          {card.score}
-        </span>
+
+        <div className="shrink-0 p-3 pl-2">
+          <Score value={card.score} tier={card.tier} title={`${card.tier} match`} />
+        </div>
       </div>
 
-      <FactLine card={card} className="mt-2" />
+      {/* Actions, on their own quiet strip. Separated from the content so the
+          eye reads the job first and the buttons second, which is the order you
+          actually make the decision in. */}
+      <div className="flex flex-wrap items-center gap-1 border-t border-slate-800/80 bg-slate-950/40 px-3 py-2">
+        <Button onClick={() => setOpen(!open)} tone={open ? 'normal' : 'quiet'}>
+          {open ? 'Hide draft' : byEmail ? 'Write email' : 'Draft message'}
+        </Button>
 
-      {card.tags.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {card.tags.map((t) => (
-            <span key={t} className="rounded bg-slate-800 px-1 text-[10px] text-slate-400">
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
+        {!byEmail && card.apply_target && (
+          <a
+            href={card.apply_target}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="rounded-md px-2.5 py-1.5 text-xs text-sky-300 transition-colors hover:bg-sky-500/10 hover:text-sky-200"
+          >
+            {card.apply_kind === 'dm' ? 'Open profile ↗' : 'Open listing ↗'}
+          </a>
+        )}
 
-      {card.why && (
-        <p className="mt-2 text-xs text-slate-500">
-          Matched your resume on <span className="text-slate-400">{card.why}</span>
-        </p>
-      )}
+        <span className="flex-1" />
 
-      {card.excerpt && (
-        <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-slate-400">{card.excerpt}</p>
-      )}
+        {note && (
+          <span className={`px-1 text-xs ${note.ok ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {note.text}
+          </span>
+        )}
+        <Button disabled={busy} onClick={() => run(() => markApplied(card.id), 'applied')}>
+          Applied
+        </Button>
+        <Button
+          disabled={busy}
+          tone="danger"
+          onClick={() => run(() => dismissCandidate(card.id), 'dismissed')}
+        >
+          Dismiss
+        </Button>
+      </div>
 
-      <div className="mt-3 space-y-2">
-        {card.apply_kind === 'email' && (
-          <input
-            value={subject}
+      {open && (
+        <div className="space-y-2 border-t border-slate-800/80 p-3">
+          {byEmail && (
+            <input
+              value={subject}
+              onChange={(e) => {
+                setSubject(e.target.value)
+                setDirty(true)
+              }}
+              placeholder="Subject"
+              className={`${inputClass} w-full`}
+            />
+          )}
+          <textarea
+            value={body}
             onChange={(e) => {
-              setSubject(e.target.value)
+              setBody(e.target.value)
               setDirty(true)
             }}
-            placeholder="Subject"
-            className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-xs text-slate-200"
+            rows={7}
+            className={`${inputClass} w-full font-mono leading-relaxed`}
           />
-        )}
-        <textarea
-          value={body}
-          onChange={(e) => {
-            setBody(e.target.value)
-            setDirty(true)
-          }}
-          rows={5}
-          className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-slate-200"
-        />
-
-        <div className="flex flex-wrap items-center gap-2">
-          {card.apply_kind === 'email' ? (
-            <button
-              disabled={busy}
-              onClick={() => run(() => sendCandidate(card.id, subject, body), 'sent')}
-              className="rounded-md bg-emerald-500/90 px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-emerald-400 disabled:opacity-50"
-            >
-              Send → {card.apply_target}
-            </button>
-          ) : (
-            <>
-              {/* No submit button: there is nothing to submit to. A DM has to be
-                  pasted into LinkedIn, an external listing has its own form. So
-                  the draft is saved for copying, and you mark it applied when
-                  you have actually done it. */}
-              <button
+          <div className="flex items-center gap-2">
+            {byEmail ? (
+              <Button
+                tone="primary"
+                disabled={busy}
+                onClick={() => run(() => sendCandidate(card.id, subject, body), 'sent')}
+              >
+                Send to {card.apply_target}
+              </Button>
+            ) : (
+              // Nothing to submit to: a DM gets pasted into LinkedIn, an
+              // external listing has its own form. So the draft is saved for
+              // copying, and you mark it applied once you actually have.
+              <Button
+                tone="normal"
                 disabled={busy}
                 onClick={() => run(() => saveDraft(card.id, subject, body), 'saved')}
-                className="rounded-md bg-slate-700 px-3 py-1.5 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
               >
                 Save draft
-              </button>
-              {card.apply_target && (
-                <a
-                  href={card.apply_target}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="rounded-md bg-sky-500/80 px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-sky-400"
-                >
-                  {card.apply_kind === 'dm' ? 'Open profile' : 'Open listing'}
-                </a>
-              )}
-            </>
-          )}
-
-          <button
-            disabled={busy}
-            onClick={() => run(() => markApplied(card.id), 'marked applied')}
-            className="text-xs text-slate-400 hover:text-slate-200 disabled:opacity-50"
-          >
-            Applied
-          </button>
-          <button
-            disabled={busy}
-            onClick={() => run(() => dismissCandidate(card.id), 'dismissed')}
-            className="text-xs text-slate-500 hover:text-rose-300 disabled:opacity-50"
-          >
-            Dismiss
-          </button>
-
-          {note && (
-            <span className={`text-xs ${note.ok ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {note.text}
-            </span>
-          )}
+              </Button>
+            )}
+            {dirty && <span className="text-xs text-slate-600">unsaved changes</span>}
+          </div>
         </div>
-      </div>
+      )}
     </article>
-  )
-}
-
-/// The one-line summary of what a posting *is* — role, level, years, where.
-/// Only what the posting actually stated; a missing piece is left out rather
-/// than guessed at.
-function FactLine({ card, className = '' }: { card: CardT; className?: string }) {
-  const bits = [card.role, card.level, card.years, card.work_mode, card.employment].filter(Boolean)
-  // The region is on the row already via the location string; showing the
-  // bucket too would be saying "Bengaluru, India" and then "india".
-  if (bits.length === 0) return null
-  return (
-    <span className={`flex flex-wrap gap-1 ${className}`}>
-      {bits.map((b) => (
-        <span
-          key={b}
-          className="rounded bg-violet-500/10 px-1 text-[10px] text-violet-300/90 ring-1 ring-violet-500/20"
-        >
-          {b}
-        </span>
-      ))}
-    </span>
-  )
-}
-
-/// The compact row used for the radar list — everything crawled, not just what
-/// fired. Deliberately not a Card: a hundred of those is a wall, and the radar
-/// is for scanning.
-export function RadarRow({ card }: { card: CardT }) {
-  return (
-    <li>
-      <a
-        href={card.url}
-        target="_blank"
-        rel="noreferrer noopener"
-        className="flex items-start gap-3 rounded-md px-2 py-1.5 hover:bg-slate-900/60"
-      >
-        <span
-          className={`mt-0.5 shrink-0 rounded px-1.5 font-mono text-xs ring-1 ${
-            TIER[card.tier] ?? TIER.marginal
-          }`}
-        >
-          {card.score}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-slate-200">{card.title}</span>
-          <span className="block truncate text-xs text-slate-500">
-            {card.company}
-            {card.location && ` · ${card.location}`} · {card.source_label} · {card.age}
-            {card.status !== 'queued' && ` · ${card.status}`}
-          </span>
-          <FactLine card={card} className="mt-0.5" />
-          {card.tags.length > 0 && (
-            <span className="mt-0.5 flex flex-wrap gap-1">
-              {card.tags.slice(0, 5).map((t) => (
-                <span key={t} className="rounded bg-slate-800 px-1 text-[10px] text-slate-400">
-                  {t}
-                </span>
-              ))}
-            </span>
-          )}
-        </span>
-      </a>
-    </li>
   )
 }
