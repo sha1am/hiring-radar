@@ -105,7 +105,8 @@ const TECH: &[(&str, &str)] = &[
 /// "ready to go" post is tagged Go.
 const GO_COMPANIONS: &[&str] = &[
     "golang", "goroutine", "gin", "fiber", "gorm", "go developer", "go engineer",
-    "go backend", "in go", "go services", "go microservices",
+    "go backend", "in go", "go services", "go microservices", "of go", "with go",
+    "using go", "go programming", "go language",
 ];
 
 /// Extract the technologies a post mentions, as canonical labels.
@@ -132,6 +133,33 @@ pub fn extract(text: &str) -> Vec<String> {
         }
     }
 
+    out.sort();
+    out
+}
+
+/// Canonicalise a list of requirements a model wrote out.
+///
+/// Different from `extract` over the joined text, and the difference is Go. The
+/// bare-word guard exists because "ready to go" is not a language, but when a
+/// model has been asked to list the technologies a posting requires and answers
+/// "Go", the context is already established — the guard is protecting against a
+/// risk that is not present, and dropping the entry silently costs the most
+/// important requirement on the board.
+pub fn extract_list(items: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for item in items {
+        let whole = item.trim().to_lowercase();
+        let found = if matches!(whole.as_str(), "go" | "golang" | "go (golang)" | "go lang") {
+            vec!["Go".to_string()]
+        } else {
+            extract(item)
+        };
+        for t in found {
+            if !out.iter().any(|x| *x == t) {
+                out.push(t);
+            }
+        }
+    }
     out.sort();
     out
 }
@@ -184,6 +212,21 @@ pub fn needle(tag: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_listing_go_means_the_language() {
+        // The bare-word guard is right for prose and wrong for a list of
+        // requirements: dropping "Go" from must_have loses the most important
+        // entry on the board.
+        let items = vec!["Go".to_string(), "Postgres".to_string(), "strong communication".into()];
+        assert_eq!(extract_list(&items), vec!["Go".to_string(), "Postgres".to_string()]);
+    }
+
+    #[test]
+    fn a_requirement_phrase_still_reads() {
+        let items = vec!["5+ years of Go".to_string(), "experience with Kubernetes".into()];
+        assert_eq!(extract_list(&items), vec!["Go".to_string(), "Kubernetes".to_string()]);
+    }
 
     #[test]
     fn finds_the_obvious_ones() {

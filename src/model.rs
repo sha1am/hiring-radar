@@ -193,6 +193,35 @@ pub struct Candidate {
     pub dimensions: Option<String>,
     /// NULL until the LLM pass has read this row. Doubles as the work queue.
     pub enriched_at: Option<i64>,
+
+    // ---- everything the model read (see enrich::Extraction) ----
+    /// Comma-delimited, like tags.
+    pub must_have: Option<String>,
+    pub nice_to_have: Option<String>,
+    pub responsibilities: Option<String>,
+    pub domain: Option<String>,
+    pub salary_min: Option<i64>,
+    pub salary_max: Option<i64>,
+    pub salary_currency: Option<String>,
+    pub salary_period: Option<String>,
+    pub visa_sponsorship: Option<bool>,
+    pub red_flags: Option<String>,
+    /// One sentence describing the job, in the model's words.
+    pub summary: Option<String>,
+    /// The model's own 0-100 read of the fit, and why.
+    pub llm_fit: Option<i64>,
+    pub llm_fit_reason: Option<String>,
+    pub llm_confidence: Option<f64>,
+    pub llm_model: Option<String>,
+    pub llm_prompt_tokens: Option<i64>,
+    pub llm_completion_tokens: Option<i64>,
+    /// The reply exactly as it arrived. Never shown; kept because it is the
+    /// only copy of what was said, and re-reading it is free.
+    pub llm_raw: Option<String>,
+}
+
+fn decode_list(v: &Option<String>) -> Vec<String> {
+    v.as_deref().map(crate::tags::decode).unwrap_or_default()
 }
 
 impl Candidate {
@@ -206,7 +235,17 @@ impl Candidate {
             work_mode: self.work_mode.clone(),
             employment: self.employment.clone(),
             stack: self.tags.as_deref().map(crate::tags::decode).unwrap_or_default(),
+            must_have: decode_list(&self.must_have),
+            nice_to_have: decode_list(&self.nice_to_have),
+            responsibilities: decode_list(&self.responsibilities),
+            domain: self.domain.clone(),
         }
+    }
+
+    /// The model's judgement of this posting, if one was ever asked for.
+    pub fn judgement(&self) -> Option<(f64, Option<String>)> {
+        self.llm_fit
+            .map(|f| (f as f64, self.llm_fit_reason.clone()))
     }
 
     /// The stored row as the post it came from.

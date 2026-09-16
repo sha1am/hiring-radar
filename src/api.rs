@@ -170,6 +170,21 @@ pub struct CardDto {
     pub draft_body: Option<String>,
     pub excerpt: String,
 
+    // ---- what a model read, when one has (see enrich::Extraction) ----
+    /// One sentence describing the job, in the model's words.
+    pub summary: Option<String>,
+    pub must_have: Vec<String>,
+    pub nice_to_have: Vec<String>,
+    pub responsibilities: Vec<String>,
+    pub domain: Option<String>,
+    pub red_flags: Vec<String>,
+    pub salary: Option<String>,
+    pub visa_sponsorship: Option<bool>,
+    /// The model's own 0-100 read, kept separate from `score` so the two can
+    /// disagree visibly rather than one quietly becoming the other.
+    pub llm_fit: Option<i64>,
+    pub llm_model: Option<String>,
+
     // ---- structured facts ----
     pub role: Option<String>,
     pub level: Option<String>,
@@ -209,6 +224,20 @@ impl CardDto {
             priority: round1(c.live_priority()),
             tier: c.tier.clone(),
             instant: c.instant,
+            summary: c.summary.clone(),
+            must_have: c.must_have.as_deref().map(crate::tags::decode).unwrap_or_default(),
+            nice_to_have: c.nice_to_have.as_deref().map(crate::tags::decode).unwrap_or_default(),
+            responsibilities: c
+                .responsibilities
+                .as_deref()
+                .map(crate::tags::decode)
+                .unwrap_or_default(),
+            domain: c.domain.clone(),
+            red_flags: c.red_flags.as_deref().map(crate::tags::decode).unwrap_or_default(),
+            salary: salary_label(c),
+            visa_sponsorship: c.visa_sponsorship,
+            llm_fit: c.llm_fit,
+            llm_model: c.llm_model.clone(),
             status: c.status.clone(),
             posted_at: c.posted_at,
             detected_at: c.detected_at,
@@ -244,6 +273,47 @@ impl CardDto {
             enriched: c.enriched_at.is_some(),
         }
     }
+}
+
+/// The pay, as a line you can read, or nothing.
+///
+/// Formatted here rather than in the client so two views cannot disagree about
+/// what "18-25 LPA" means, and rendered from whatever the posting actually
+/// stated: a floor with no ceiling is a real thing to say, and so is a ceiling
+/// with no floor.
+fn salary_label(c: &crate::model::Candidate) -> Option<String> {
+    let cur = c.salary_currency.as_deref().unwrap_or("");
+    let per = c
+        .salary_period
+        .as_deref()
+        .map(|p| format!("/{p}"))
+        .unwrap_or_default();
+    // Lakhs for rupees, because every Indian posting quotes LPA and "3500k"
+    // is a number nobody says out loud. Thousands and millions elsewhere.
+    let inr = cur.eq_ignore_ascii_case("INR");
+    let n = |v: i64| {
+        if inr && v >= 100_000 {
+            let l = v as f64 / 100_000.0;
+            if (l - l.round()).abs() < 0.05 {
+                format!("{l:.0}L")
+            } else {
+                format!("{l:.1}L")
+            }
+        } else if v >= 1_000_000 {
+            format!("{:.1}M", v as f64 / 1_000_000.0)
+        } else if v >= 1_000 {
+            format!("{:.0}k", v as f64 / 1000.0)
+        } else {
+            v.to_string()
+        }
+    };
+    match (c.salary_min, c.salary_max) {
+        (Some(lo), Some(hi)) => Some(format!("{cur} {}-{}{per}", n(lo), n(hi))),
+        (Some(lo), None) => Some(format!("{cur} {}+{per}", n(lo))),
+        (None, Some(hi)) => Some(format!("{cur} up to {}{per}", n(hi))),
+        (None, None) => None,
+    }
+    .map(|s| s.trim().to_string())
 }
 
 /// Scores are rendered to one decimal everywhere. Rounding at the boundary
@@ -351,6 +421,21 @@ pub struct StatusDto {
     pub rows_in_window: i64,
     pub window_hours: i64,
     pub outbox_count: i64,
+    /// Which model is reading the postings, and what it has cost so far.
+    ///
+    /// On the status panel because it is the one part of this system billed per
+    /// posting: a counter you can see is the difference between an experiment
+    /// and a surprise at the end of the month.
+    pub llm: Option<LlmStatusDto>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct LlmStatusDto {
+    pub model: String,
+    pub pending: i64,
+    pub read: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
 }
 
 /// What a company list looks like from the API: contents, provenance, and the
@@ -829,6 +914,19 @@ async fn status_dto(st: &AppState, hours: i64) -> StatusDto {
         outbox_count: db::outbox_count(&st.pool, live.outbox_min)
             .await
             .unwrap_or(0),
+        llm: if st.enricher.is_llm() {
+            let (read, prompt_tokens, completion_tokens) =
+                db::llm_usage(&st.pool).await.unwrap_or((0, 0, 0));
+            Some(LlmStatusDto {
+                model: st.enricher.describe(),
+                pending: db::unenriched_count(&st.pool).await.unwrap_or(0),
+                read,
+                prompt_tokens,
+                completion_tokens,
+            })
+        } else {
+            None
+        },
     }
 }
 
@@ -880,6 +978,24 @@ mod tests {
             priority: 78.349,
             tier: "strong".into(),
             instant: false,
+            must_have: None,
+            nice_to_have: None,
+            responsibilities: None,
+            domain: None,
+            salary_min: None,
+            salary_max: None,
+            salary_currency: None,
+            salary_period: None,
+            visa_sponsorship: None,
+            red_flags: None,
+            summary: None,
+            llm_fit: None,
+            llm_fit_reason: None,
+            llm_confidence: None,
+            llm_model: None,
+            llm_prompt_tokens: None,
+            llm_completion_tokens: None,
+            llm_raw: None,
             status: "queued".into(),
             detected_at: crate::model::now() - 600,
             posted_at: Some(crate::model::now() - 600),
@@ -980,6 +1096,26 @@ mod tests {
         let mut c = candidate();
         c.body = "Short and complete.".into();
         assert_eq!(CardDto::from(&c).excerpt, "Short and complete.");
+    }
+
+    #[test]
+    fn pay_reads_the_way_it_is_quoted() {
+        let mut c = candidate();
+        c.salary_currency = Some("INR".into());
+        c.salary_period = Some("year".into());
+        c.salary_min = Some(3_500_000);
+        c.salary_max = Some(5_000_000);
+        // Every Indian posting quotes lakhs; "3500k" is a number nobody says.
+        assert_eq!(salary_label(&c).as_deref(), Some("INR 35L-50L/year"));
+
+        c.salary_currency = Some("USD".into());
+        c.salary_min = Some(120_000);
+        c.salary_max = None;
+        assert_eq!(salary_label(&c).as_deref(), Some("USD 120k+/year"));
+
+        c.salary_min = None;
+        c.salary_max = None;
+        assert_eq!(salary_label(&c), None);
     }
 
     #[test]

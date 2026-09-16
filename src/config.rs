@@ -10,6 +10,12 @@ pub struct Config {
     pub email: EmailCfg,
     pub server: ServerCfg,
     pub draft: DraftCfg,
+    /// The model that reads postings. Absent means the section was never added
+    /// to config.toml, which is a working configuration: the heuristics run
+    /// either way and `build_enricher` falls back to the legacy `[draft]`
+    /// ollama settings.
+    #[serde(default)]
+    pub llm: LlmCfg,
     #[serde(default)]
     pub greenhouse: Greenhouse,
     #[serde(default)]
@@ -123,6 +129,57 @@ pub struct ServerCfg {
 fn def_radar_hours() -> i64 { 24 }
 fn def_prune_days() -> i64 { 30 }
 
+/// Who reads the postings, and where.
+///
+/// One section rather than a provider-shaped zoo of them, because every hosted
+/// model worth using speaks the OpenAI chat-completions shape: point `base_url`
+/// at api.openai.com, at OpenRouter, at Groq, or at Ollama's own `/v1`, and the
+/// only thing that changes is the model name.
+///
+/// The key is never in here. It comes from the environment, like every other
+/// secret in this project — a key in a mounted config file is a key in your
+/// shell history and your backups.
+#[derive(Clone, Debug, Deserialize)]
+pub struct LlmCfg {
+    /// "none" | "openai" | "ollama".
+    #[serde(default = "def_llm_provider")]
+    pub provider: String,
+    #[serde(default = "def_llm_base_url")]
+    pub base_url: String,
+    #[serde(default = "def_llm_model")]
+    pub model: String,
+    /// From `OPENAI_API_KEY` (or `RADAR_LLM_API_KEY`). Never from the file.
+    #[serde(skip)]
+    pub api_key: Option<String>,
+    /// How much of a posting to send. Whole JDs run to ten thousand characters
+    /// of benefits and boilerplate; the requirements are always near the top.
+    #[serde(default = "def_llm_max_chars")]
+    pub max_body_chars: usize,
+    /// Sent only when set. The newer reasoning models reject it outright, and
+    /// a request that 400s because of a parameter nobody asked for is a bad
+    /// default.
+    #[serde(default)]
+    pub temperature: Option<f64>,
+}
+
+fn def_llm_provider() -> String { "none".into() }
+fn def_llm_base_url() -> String { "https://api.openai.com/v1".into() }
+fn def_llm_model() -> String { "gpt-5.4-mini".into() }
+fn def_llm_max_chars() -> usize { 6000 }
+
+impl Default for LlmCfg {
+    fn default() -> Self {
+        Self {
+            provider: def_llm_provider(),
+            base_url: def_llm_base_url(),
+            model: def_llm_model(),
+            api_key: None,
+            max_body_chars: def_llm_max_chars(),
+            temperature: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct DraftCfg {
     pub provider: String,
@@ -155,6 +212,10 @@ impl Config {
         // Secrets never live in the file; pull them from the environment.
         cfg.email.smtp_password = std::env::var("SMTP_PASSWORD").ok();
         cfg.linkedin_voyager.li_at = std::env::var("LI_AT").ok();
+        cfg.llm.api_key = std::env::var("OPENAI_API_KEY")
+            .or_else(|_| std::env::var("RADAR_LLM_API_KEY"))
+            .ok()
+            .filter(|k| !k.trim().is_empty());
         cfg.linkedin_voyager.jsessionid = std::env::var("LI_JSESSIONID").ok();
 
         // Deployment-shaped overrides. In a container the process must bind

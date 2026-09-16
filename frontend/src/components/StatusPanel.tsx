@@ -198,6 +198,30 @@ function Logs() {
   )
 }
 
+/// What the model has read, and what it has cost.
+///
+/// The token counts are here because this is the only part of the system billed
+/// per posting, and a number you can see is the difference between an
+/// experiment and a surprise at the end of the month. `pending` is the backlog:
+/// the board sharpens as it drains.
+function LlmCard({ llm }: { llm: NonNullable<Status['llm']> }) {
+  const tokens = llm.prompt_tokens + llm.completion_tokens
+  const fmt = (n: number) =>
+    n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`
+  return (
+    <div className="space-y-1.5">
+      <Heading>Reader</Heading>
+      <div className="rounded-lg bg-slate-900/40 p-3 text-xs ring-1 ring-slate-800/80">
+        <p className="text-slate-300">{llm.model}</p>
+        <p className="mt-1 text-slate-500">
+          {llm.read.toLocaleString()} postings read · {fmt(tokens)} tokens
+          {llm.pending > 0 && ` · ${llm.pending.toLocaleString()} waiting`}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export function StatusPanel({ status }: { status: Status }) {
   return (
     <section className="space-y-4">
@@ -226,6 +250,8 @@ export function StatusPanel({ status }: { status: Status }) {
           </div>
         )}
       </div>
+
+      {status.llm && <LlmCard llm={status.llm} />}
 
       <Logs />
     </section>

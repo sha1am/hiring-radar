@@ -11,8 +11,42 @@ import { Breakdown, Button, Dotted, Score, TIER_ACCENT, VerdictBadge, inputClass
 /// what made the board feel busy.
 function facts(card: CardT): string | null {
   const role = [card.level, card.role].filter(Boolean).join(' ')
-  const bits = [role, card.years, card.work_mode, card.employment].filter(Boolean)
+  // Pay goes in the phrase rather than a badge of its own: it is one more fact
+  // about the job, and most postings never state it.
+  const bits = [role, card.years, card.work_mode, card.employment, card.salary].filter(Boolean)
   return bits.length ? bits.join(' · ') : null
+}
+
+/// What the posting insists on, separated from what it would like.
+///
+/// Only present once a model has read the posting — the heuristics cannot tell
+/// "5+ years of Go" from "Kubernetes a plus", and printing a flat list of
+/// technologies as though they were all requirements is how you talk yourself
+/// out of applying to something.
+function Requirements({ card }: { card: CardT }) {
+  if (card.must_have.length === 0 && card.nice_to_have.length === 0) return null
+  return (
+    <dl className="mt-2 space-y-1 text-[11px]">
+      {card.must_have.length > 0 && (
+        <div className="flex gap-2">
+          <dt className="w-16 shrink-0 uppercase tracking-[0.08em] text-slate-600">needs</dt>
+          <dd className="text-slate-300">{card.must_have.join(' · ')}</dd>
+        </div>
+      )}
+      {card.nice_to_have.length > 0 && (
+        <div className="flex gap-2">
+          <dt className="w-16 shrink-0 uppercase tracking-[0.08em] text-slate-600">likes</dt>
+          <dd className="text-slate-500">{card.nice_to_have.join(' · ')}</dd>
+        </div>
+      )}
+      {card.red_flags.length > 0 && (
+        <div className="flex gap-2">
+          <dt className="w-16 shrink-0 uppercase tracking-[0.08em] text-rose-400/70">watch</dt>
+          <dd className="text-rose-300/90">{card.red_flags.join(' · ')}</dd>
+        </div>
+      )}
+    </dl>
+  )
 }
 
 function stack(card: CardT, max = 4): string | null {
@@ -172,6 +206,12 @@ export function Card({ card, onChanged }: { card: CardT; onChanged: () => void }
           {/* The assessment's own sentence. It replaces the old "matched on
               go, kafka, systems", which read as evidence but was true of every
               posting you would ever look at. */}
+          {/* The model's one-line description of the job, when it read one.
+              Above the assessment because "what is this job" comes before "how
+              well does it suit you". */}
+          {card.summary && (
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-300">{card.summary}</p>
+          )}
           {card.reason ? (
             <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{card.reason}</p>
           ) : (
@@ -181,6 +221,7 @@ export function Card({ card, onChanged }: { card: CardT; onChanged: () => void }
               </p>
             )
           )}
+          <Requirements card={card} />
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-1.5 p-3 pl-2">

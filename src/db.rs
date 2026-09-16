@@ -116,6 +116,30 @@ const MIGRATIONS: &[&str] = &[
     // the settling window, and a row should carry the reason it was treated the
     // way it was.
     "ALTER TABLE candidates ADD COLUMN instant INTEGER NOT NULL DEFAULT 0",
+    // Everything one model call produces. A call costs money and seconds, and
+    // the previous version spent both and then kept seven fields out of the
+    // reply — so every field the model answers now has somewhere to live,
+    // including the reply itself. `llm_raw` is the only copy of what was
+    // actually said: a schema is a guess about what will matter later, and
+    // re-reading a stored reply is free where re-asking is not.
+    "ALTER TABLE candidates ADD COLUMN must_have TEXT",
+    "ALTER TABLE candidates ADD COLUMN nice_to_have TEXT",
+    "ALTER TABLE candidates ADD COLUMN responsibilities TEXT",
+    "ALTER TABLE candidates ADD COLUMN domain TEXT",
+    "ALTER TABLE candidates ADD COLUMN salary_min INTEGER",
+    "ALTER TABLE candidates ADD COLUMN salary_max INTEGER",
+    "ALTER TABLE candidates ADD COLUMN salary_currency TEXT",
+    "ALTER TABLE candidates ADD COLUMN salary_period TEXT",
+    "ALTER TABLE candidates ADD COLUMN visa_sponsorship INTEGER",
+    "ALTER TABLE candidates ADD COLUMN red_flags TEXT",
+    "ALTER TABLE candidates ADD COLUMN summary TEXT",
+    "ALTER TABLE candidates ADD COLUMN llm_fit INTEGER",
+    "ALTER TABLE candidates ADD COLUMN llm_fit_reason TEXT",
+    "ALTER TABLE candidates ADD COLUMN llm_confidence REAL",
+    "ALTER TABLE candidates ADD COLUMN llm_model TEXT",
+    "ALTER TABLE candidates ADD COLUMN llm_prompt_tokens INTEGER",
+    "ALTER TABLE candidates ADD COLUMN llm_completion_tokens INTEGER",
+    "ALTER TABLE candidates ADD COLUMN llm_raw TEXT",
 ];
 
 pub async fn connect(url: &str) -> anyhow::Result<SqlitePool> {
@@ -984,16 +1008,30 @@ pub async fn unenriched(pool: &SqlitePool, limit: i64) -> anyhow::Result<Vec<Can
 ///
 /// `enriched_at` is set even when nothing changed, so a posting the model has no
 /// opinion about is not re-read forever.
-pub async fn set_facts(
+/// Write back everything one model call produced.
+///
+/// One statement rather than a fact-shaped one and a model-shaped one, because
+/// they describe the same reading of the same posting and a half-applied
+/// enrichment is a row nobody can reason about. `enriched_at` is set even when
+/// the model had no opinion, so a posting it cannot improve is not retried
+/// forever.
+pub async fn set_extraction(
     pool: &SqlitePool,
     id: i64,
     f: &crate::enrich::Facts,
     tags: Option<String>,
+    e: Option<&crate::enrich::Extraction>,
 ) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE candidates
          SET role = ?, level = ?, years_min = ?, years_max = ?,
-             work_mode = ?, employment = ?, tags = ?, enriched_at = ?
+             work_mode = ?, employment = ?, tags = ?, domain = ?,
+             must_have = ?, nice_to_have = ?, responsibilities = ?,
+             salary_min = ?, salary_max = ?, salary_currency = ?, salary_period = ?,
+             visa_sponsorship = ?, red_flags = ?, summary = ?,
+             llm_fit = ?, llm_fit_reason = ?, llm_confidence = ?,
+             llm_model = ?, llm_prompt_tokens = ?, llm_completion_tokens = ?,
+             llm_raw = ?, enriched_at = ?
          WHERE id = ?",
     )
     .bind(&f.role)
@@ -1003,11 +1041,44 @@ pub async fn set_facts(
     .bind(&f.work_mode)
     .bind(&f.employment)
     .bind(tags)
+    .bind(&f.domain)
+    .bind(crate::tags::encode(&f.must_have))
+    .bind(crate::tags::encode(&f.nice_to_have))
+    .bind(crate::tags::encode(&f.responsibilities))
+    .bind(e.and_then(|e| e.salary_min))
+    .bind(e.and_then(|e| e.salary_max))
+    .bind(e.and_then(|e| e.salary_currency.clone()))
+    .bind(e.and_then(|e| e.salary_period.clone()))
+    .bind(e.and_then(|e| e.visa_sponsorship))
+    .bind(e.and_then(|e| crate::tags::encode(&e.red_flags)))
+    .bind(e.and_then(|e| e.summary.clone()))
+    .bind(e.and_then(|e| e.fit))
+    .bind(e.and_then(|e| e.fit_reason.clone()))
+    .bind(e.and_then(|e| e.confidence))
+    .bind(e.map(|e| e.model.clone()))
+    .bind(e.map(|e| e.prompt_tokens))
+    .bind(e.map(|e| e.completion_tokens))
+    .bind(e.map(|e| e.raw.clone()))
     .bind(now())
     .bind(id)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// What the model pass has cost so far, for the status panel.
+///
+/// This is the one part of the system that is billed per posting. A counter you
+/// can see is the difference between an experiment and a surprise.
+pub async fn llm_usage(pool: &SqlitePool) -> anyhow::Result<(i64, i64, i64)> {
+    let row: (i64, i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), COALESCE(SUM(llm_prompt_tokens), 0),
+                COALESCE(SUM(llm_completion_tokens), 0)
+         FROM candidates WHERE llm_model IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
 }
 
 /// How many rows are still waiting, for the status panel.

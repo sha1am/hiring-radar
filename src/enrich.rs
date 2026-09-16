@@ -46,7 +46,28 @@ pub struct Facts {
     pub employment: Option<String>,
     /// Technologies, canonical labels — the same vocabulary as the chips.
     pub stack: Vec<String>,
+    /// What the posting says you must have, in its own words.
+    ///
+    /// Separate from `stack` because the difference between "5 years of Go" and
+    /// "exposure to Go a plus" is the whole question, and a flat list of
+    /// technologies cannot express it. Only a model reading prose can tell them
+    /// apart, so these are empty until one has.
+    pub must_have: Vec<String>,
+    /// What it would like you to have. Worth points, never worth a rejection.
+    pub nice_to_have: Vec<String>,
+    /// What you would actually be doing, a few short phrases.
+    pub responsibilities: Vec<String>,
+    /// The business the work is in. See [`DOMAINS`].
+    pub domain: Option<String>,
 }
+
+/// The closed vocabulary for `domain`. Closed for the same reason `ROLES` is:
+/// a free-text industry produces forty spellings of "fintech".
+pub const DOMAINS: &[&str] = &[
+    "fintech", "ecommerce", "logistics", "healthtech", "edtech", "gaming",
+    "adtech", "devtools", "infrastructure", "data", "security", "social",
+    "travel", "mobility", "enterprise", "consulting", "other",
+];
 
 /// The closed vocabulary for `role`. Closed on purpose: filters are only useful
 /// if the same job lands under the same label every time, and a free-text role
@@ -74,7 +95,18 @@ impl Facts {
     pub fn sanitize(&mut self) {
         self.role = in_vocab(&self.role, ROLES);
         self.level = in_vocab(&self.level, LEVELS);
+        self.domain = in_vocab(&self.domain, DOMAINS);
         self.work_mode = in_vocab(&self.work_mode, WORK_MODES);
+        // A model asked for a list will occasionally return an essay in one
+        // element. These are shown on a card and matched as phrases; neither
+        // survives a paragraph.
+        for list in [&mut self.must_have, &mut self.nice_to_have, &mut self.responsibilities] {
+            for item in list.iter_mut() {
+                *item = item.trim().trim_matches('.').chars().take(80).collect();
+            }
+            list.retain(|i| !i.is_empty());
+            list.truncate(12);
+        }
         self.employment = in_vocab(&self.employment, EMPLOYMENT);
 
         // A listing asking for 40 years is a parse error, not a listing.
@@ -127,12 +159,27 @@ impl Facts {
         if other.employment.is_some() {
             self.employment = other.employment;
         }
+        if other.domain.is_some() {
+            self.domain = other.domain;
+        }
         // The stack is a union: the extractor knows aliases the model won't
         // bother with, and the model reads prose the extractor can't.
         for t in other.stack {
             if !self.stack.iter().any(|x| x.eq_ignore_ascii_case(&t)) {
                 self.stack.push(t);
             }
+        }
+        // These three only ever come from a model, so there is nothing to
+        // merge with: a non-empty answer replaces whatever was there, and an
+        // empty one leaves the last good reading alone.
+        if !other.must_have.is_empty() {
+            self.must_have = other.must_have;
+        }
+        if !other.nice_to_have.is_empty() {
+            self.nice_to_have = other.nice_to_have;
+        }
+        if !other.responsibilities.is_empty() {
+            self.responsibilities = other.responsibilities;
         }
         self.sanitize();
     }
@@ -351,6 +398,10 @@ pub fn heuristic(post: &RawPost) -> Facts {
         work_mode,
         employment,
         stack: crate::tags::extract(&post.haystack()),
+        // Required-versus-preferred, what the job involves and what business it
+        // is in are all prose questions. The heuristics leave them empty rather
+        // than guessing; a model fills them in later if one is configured.
+        ..Default::default()
     };
     f.sanitize();
     f
@@ -424,13 +475,57 @@ pub fn years(hay: &str) -> (Option<i64>, Option<i64>) {
 
 // ===================== the LLM pass =====================
 
+/// Everything one model call produces about one posting.
+///
+/// Wider than `Facts` on purpose. A call to a hosted model costs real money and
+/// takes real seconds, and the old prompt spent both on seven fields — then
+/// threw away everything else the model had already read in order to answer
+/// them. Salary, visa sponsorship, what the job actually involves, what it
+/// insists on versus what it would like: all of that was in the reply and none
+/// of it was kept. Ask once, keep everything.
+#[derive(Clone, Debug, Default)]
+pub struct Extraction {
+    pub facts: Facts,
+    pub salary_min: Option<i64>,
+    pub salary_max: Option<i64>,
+    pub salary_currency: Option<String>,
+    /// year | month | day | hour.
+    pub salary_period: Option<String>,
+    pub visa_sponsorship: Option<bool>,
+    /// Things worth knowing before you spend an evening on an application.
+    pub red_flags: Vec<String>,
+    /// One sentence describing the job, in the model's words.
+    pub summary: Option<String>,
+    /// The model's own read of the fit, 0-100, given the candidate profile.
+    pub fit: Option<i64>,
+    /// One line saying why. Shown in the score breakdown next to the number.
+    pub fit_reason: Option<String>,
+    /// How sure the model says it is, 0-1. Low confidence still stores; it is
+    /// the reader's job to decide, and hiding the number would not help.
+    pub confidence: Option<f64>,
+    pub model: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    /// The reply exactly as it arrived.
+    ///
+    /// Kept because a schema is a guess about what will matter later, and this
+    /// is the only copy of what was actually said. Re-reading a stored reply
+    /// costs nothing; re-asking costs a call per posting.
+    pub raw: String,
+}
+
 #[async_trait::async_trait]
 pub trait Enricher: Send + Sync {
-    /// Read the posting. `None` means "no opinion" — the heuristics stand.
-    async fn read(&self, post: &RawPost) -> Option<Facts>;
+    /// Read the posting against a candidate profile. `None` means "no opinion" —
+    /// the heuristics stand.
+    async fn read(&self, post: &RawPost, me: &crate::ats::Profile) -> Option<Extraction>;
     /// Whether this is worth running a background pass for at all.
     fn is_llm(&self) -> bool {
         false
+    }
+    /// For the log line at boot: which model, where.
+    fn describe(&self) -> String {
+        "none".into()
     }
 }
 
@@ -441,48 +536,87 @@ pub struct NoEnricher;
 
 #[async_trait::async_trait]
 impl Enricher for NoEnricher {
-    async fn read(&self, _post: &RawPost) -> Option<Facts> {
+    async fn read(&self, _post: &RawPost, _me: &crate::ats::Profile) -> Option<Extraction> {
         None
     }
 }
 
-pub struct OllamaEnricher {
-    pub client: reqwest::Client,
-    pub url: String,
-    pub model: String,
-}
-
-/// What the model is asked for, and the exact words of the vocabulary it must
-/// choose from. Sent as JSON mode so the reply is parseable rather than prose.
-fn prompt(post: &RawPost) -> String {
-    format!(
-        "Read this job posting and extract facts. Reply with JSON only, no prose.\n\n\
-         Schema — use null for anything the posting does not state. Do not guess.\n\
-         {{\n  \"role\": one of [{roles}] or null,\n  \
+/// What the model is asked for.
+///
+/// The candidate goes in the prompt as well as the posting, which is the
+/// change that makes this worth paying for: "does this posting want five years
+/// of Kafka" is a question about the text, and "is this worth Shadab's evening"
+/// is a question about both. The model answers the first as facts and the
+/// second as one number it has to justify in a sentence.
+///
+/// The vocabulary is spelled out because a filter is only useful if the same
+/// job lands under the same label every time, and anything outside it is
+/// dropped in `sanitize` rather than stored.
+fn prompt(post: &RawPost, me: &crate::ats::Profile, max_body: usize) -> (String, String) {
+    let system = format!(
+        "You read job postings for one specific engineer and return JSON only. \
+         No prose, no markdown fence. Use null for anything the posting does not \
+         state — never guess, and never infer a requirement from a job title. \
+         Reply with exactly this shape:\n\
+         {{\n  \
+         \"role\": one of [{roles}] or null,\n  \
          \"level\": one of [{levels}] or null,\n  \
-         \"years_min\": integer or null,   // years of experience required, the lower bound\n  \
-         \"years_max\": integer or null,   // upper bound; null for \"5+\"\n  \
+         \"years_min\": integer or null,\n  \
+         \"years_max\": integer or null,\n  \
          \"work_mode\": one of [{modes}] or null,\n  \
          \"employment\": one of [{emp}] or null,\n  \
-         \"stack\": [\"Go\", \"Postgres\"]  // named technologies only, [] if none\n}}\n\n\
-         Rules: pick the single best role for the whole job, not every discipline \
-         mentioned. Level is the seniority of THIS role, not of the team. Years \
-         must be stated in the posting; if it only says \"experienced\", use null.\n\n\
-         Title: {title}\nCompany: {company}\nLocation: {location}\n\nPosting:\n{body}\n\nJSON:",
+         \"domain\": one of [{domains}] or null,\n  \
+         \"stack\": [\"Go\", \"Postgres\"],\n  \
+         \"must_have\": [\"5+ years building backend services\", \"Go\"],\n  \
+         \"nice_to_have\": [\"Kubernetes\", \"fintech experience\"],\n  \
+         \"responsibilities\": [\"own the payments ledger service\"],\n  \
+         \"salary_min\": integer or null, \"salary_max\": integer or null,\n  \
+         \"salary_currency\": \"INR\" | \"USD\" | ... or null,\n  \
+         \"salary_period\": \"year\" | \"month\" | \"day\" | \"hour\" or null,\n  \
+         \"visa_sponsorship\": true | false | null,\n  \
+         \"red_flags\": [\"unpaid trial task\"],\n  \
+         \"summary\": one sentence, what this job is,\n  \
+         \"fit\": integer 0-100, \"fit_reason\": one sentence,\n  \
+         \"confidence\": number 0-1\n}}\n\n\
+         must_have is what the posting requires; nice_to_have is what it calls \
+         preferred, bonus or a plus. Put a requirement in exactly one of them. \
+         red_flags is for things a candidate would want warned about — an unpaid \
+         task, equity instead of salary, ten years wanted for a mid-level title, \
+         a title that does not match the work. Empty list if there are none.\n\n\
+         fit is your judgement of this candidate against this posting: 100 means \
+         they meet everything it asks for, 50 means a real stretch, 0 means a \
+         different profession. Judge the work and the requirements, not the \
+         company's prestige. fit_reason must name the single thing that decided \
+         the number.",
         roles = ROLES.join(", "),
         levels = LEVELS.join(", "),
         modes = WORK_MODES.join(", "),
         emp = EMPLOYMENT.join(", "),
+        domains = DOMAINS.join(", "),
+    );
+
+    let user = format!(
+        "CANDIDATE\nExperience: {years}\nLevel: {level}\nDisciplines: {roles}\nStack: {stack}\n\n\
+         POSTING\nTitle: {title}\nCompany: {company}\nLocation: {location}\n\n{body}",
+        years = me
+            .years
+            .map(|y| format!("{y} years"))
+            .unwrap_or_else(|| "not stated".into()),
+        level = me.level.clone().unwrap_or_else(|| "not stated".into()),
+        roles = if me.roles.is_empty() { "not stated".into() } else { me.roles.join(", ") },
+        stack = if me.stack.is_empty() { "not stated".into() } else { me.stack.join(", ") },
         title = post.title,
         company = post.company,
         location = post.location.as_deref().unwrap_or("not stated"),
-        body = post.body.chars().take(4000).collect::<String>(),
-    )
+        body = post.body.chars().take(max_body).collect::<String>(),
+    );
+
+    (system, user)
 }
 
 /// The model's reply. Every field is `Option` and the whole struct tolerates
-/// junk, because a local model *will* occasionally return a string where a
-/// number belongs, and one bad reply must not poison a whole batch.
+/// junk, because a model *will* occasionally return a string where a number
+/// belongs, and one bad reply must not poison a whole batch.
 #[derive(Deserialize, Default)]
 struct Reply {
     #[serde(default)]
@@ -498,7 +632,35 @@ struct Reply {
     #[serde(default)]
     employment: Option<String>,
     #[serde(default)]
+    domain: Option<String>,
+    #[serde(default, deserialize_with = "lenient_list")]
     stack: Vec<String>,
+    #[serde(default, deserialize_with = "lenient_list")]
+    must_have: Vec<String>,
+    #[serde(default, deserialize_with = "lenient_list")]
+    nice_to_have: Vec<String>,
+    #[serde(default, deserialize_with = "lenient_list")]
+    responsibilities: Vec<String>,
+    #[serde(default, deserialize_with = "lenient_int")]
+    salary_min: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_int")]
+    salary_max: Option<i64>,
+    #[serde(default)]
+    salary_currency: Option<String>,
+    #[serde(default)]
+    salary_period: Option<String>,
+    #[serde(default, deserialize_with = "lenient_bool")]
+    visa_sponsorship: Option<bool>,
+    #[serde(default, deserialize_with = "lenient_list")]
+    red_flags: Vec<String>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default, deserialize_with = "lenient_int")]
+    fit: Option<i64>,
+    #[serde(default)]
+    fit_reason: Option<String>,
+    #[serde(default, deserialize_with = "lenient_float")]
+    confidence: Option<f64>,
 }
 
 /// Accept 5, "5", "5+" and null where an integer belongs.
@@ -509,15 +671,198 @@ where
     use serde::Deserialize as _;
     let v = serde_json::Value::deserialize(d)?;
     Ok(match v {
-        serde_json::Value::Number(n) => n.as_i64(),
-        serde_json::Value::String(s) => s
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse()
-            .ok(),
+        serde_json::Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
+        serde_json::Value::String(s) => {
+            let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+            digits.parse().ok()
+        }
         _ => None,
     })
+}
+
+fn lenient_float<'de, D>(d: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    })
+}
+
+fn lenient_bool<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Bool(b) => Some(b),
+        serde_json::Value::String(s) => match s.trim().to_lowercase().as_str() {
+            "true" | "yes" => Some(true),
+            "false" | "no" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// A list where a list is wanted, and a single string counted as a list of one.
+fn lenient_list<'de, D>(d: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Array(a) => a
+            .into_iter()
+            .filter_map(|x| match x {
+                serde_json::Value::String(s) => Some(s),
+                // Some models answer [{"name": "Go"}] no matter how you ask.
+                serde_json::Value::Object(o) => o
+                    .get("name")
+                    .or_else(|| o.get("skill"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                other => Some(other.to_string()),
+            })
+            .collect(),
+        serde_json::Value::String(s) => vec![s],
+        _ => Vec::new(),
+    })
+}
+
+fn parse_reply(text: &str) -> Option<Reply> {
+    if let Ok(r) = serde_json::from_str::<Reply>(text.trim()) {
+        return Some(r);
+    }
+    serde_json::from_str::<Reply>(crate::llm::first_object(text)?).ok()
+}
+
+/// A validated `Extraction`, or `None` if the reply was not usable.
+fn extraction_from(text: &str, model: &str) -> Option<Extraction> {
+    let r = parse_reply(text)?;
+    let mut facts = Facts {
+        role: r.role,
+        level: r.level,
+        years_min: r.years_min,
+        years_max: r.years_max,
+        work_mode: r.work_mode,
+        employment: r.employment,
+        domain: r.domain,
+        stack: r.stack,
+        must_have: r.must_have,
+        nice_to_have: r.nice_to_have,
+        responsibilities: r.responsibilities,
+    };
+    facts.sanitize();
+
+    let mut e = Extraction {
+        facts,
+        salary_min: r.salary_min,
+        salary_max: r.salary_max,
+        salary_currency: r.salary_currency.map(|c| c.trim().to_uppercase()),
+        salary_period: in_vocab(&r.salary_period, &["year", "month", "day", "hour"]),
+        visa_sponsorship: r.visa_sponsorship,
+        red_flags: r.red_flags,
+        summary: r.summary,
+        fit: r.fit,
+        fit_reason: r.fit_reason,
+        confidence: r.confidence,
+        model: model.to_string(),
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        raw: text.trim().to_string(),
+    };
+    e.sanitize();
+    Some(e)
+}
+
+impl Extraction {
+    /// Bound everything a model could get wrong in a way that matters.
+    fn sanitize(&mut self) {
+        // A "fit" of 250 is a model that did not read the instruction, not a
+        // very good match.
+        self.fit = self.fit.map(|f| f.clamp(0, 100));
+        self.confidence = self.confidence.map(|c| c.clamp(0.0, 1.0));
+        if let (Some(lo), Some(hi)) = (self.salary_min, self.salary_max) {
+            if hi < lo {
+                self.salary_max = None;
+            }
+        }
+        // Salaries are reported in wildly different units; anything outside
+        // this is a parse error rather than an offer.
+        for s in [&mut self.salary_min, &mut self.salary_max] {
+            if s.is_some_and(|v| !(1..=100_000_000).contains(&v)) {
+                *s = None;
+            }
+        }
+        for t in [&mut self.summary, &mut self.fit_reason] {
+            if let Some(v) = t {
+                *v = v.trim().chars().take(300).collect();
+                if v.is_empty() {
+                    *t = None;
+                }
+            }
+        }
+        for f in self.red_flags.iter_mut() {
+            *f = f.trim().chars().take(120).collect();
+        }
+        self.red_flags.retain(|f| !f.is_empty());
+        self.red_flags.truncate(6);
+        // The raw reply is stored on the row; a model that returns an essay
+        // must not turn one row into a megabyte.
+        self.raw = self.raw.chars().take(20_000).collect();
+    }
+}
+
+/// A hosted model, over the OpenAI chat-completions shape.
+pub struct OpenAiEnricher {
+    pub client: crate::llm::Client,
+    pub max_body_chars: usize,
+    pub base_url: String,
+}
+
+#[async_trait::async_trait]
+impl Enricher for OpenAiEnricher {
+    fn is_llm(&self) -> bool {
+        true
+    }
+
+    fn describe(&self) -> String {
+        format!("{} at {}", self.client.model(), self.base_url)
+    }
+
+    async fn read(&self, post: &RawPost, me: &crate::ats::Profile) -> Option<Extraction> {
+        let (system, user) = prompt(post, me, self.max_body_chars);
+        let answer = match self.client.json(&system, &user).await {
+            Ok(a) => a,
+            Err(e) => {
+                // Loud rather than quiet: this one costs money and is the
+                // difference between a sharpened board and a heuristic one, so
+                // a key that is wrong should be visible on the Status tab
+                // rather than a debug line nobody reads.
+                tracing::warn!(%e, title = %post.title, "llm read failed");
+                return None;
+            }
+        };
+        let mut e = extraction_from(&answer.content, &answer.model)?;
+        e.prompt_tokens = answer.usage.prompt_tokens;
+        e.completion_tokens = answer.usage.completion_tokens;
+        Some(e)
+    }
+}
+
+/// A local model, over Ollama's own endpoint. Same prompt, same validation.
+pub struct OllamaEnricher {
+    pub client: reqwest::Client,
+    pub url: String,
+    pub model: String,
+    pub max_body_chars: usize,
 }
 
 #[async_trait::async_trait]
@@ -526,10 +871,16 @@ impl Enricher for OllamaEnricher {
         true
     }
 
-    async fn read(&self, post: &RawPost) -> Option<Facts> {
+    fn describe(&self) -> String {
+        format!("{} at {}", self.model, self.url)
+    }
+
+    async fn read(&self, post: &RawPost, me: &crate::ats::Profile) -> Option<Extraction> {
+        let (system, user) = prompt(post, me, self.max_body_chars);
         let req = serde_json::json!({
             "model": self.model,
-            "prompt": prompt(post),
+            "system": system,
+            "prompt": user,
             "format": "json",
             "stream": false,
             // Extraction, not writing. Temperature 0 so the same posting reads
@@ -551,46 +902,54 @@ impl Enricher for OllamaEnricher {
         }
         .await?;
 
-        let reply: Reply = parse_reply(&text)?;
-        let mut f = Facts {
-            role: reply.role,
-            level: reply.level,
-            years_min: reply.years_min,
-            years_max: reply.years_max,
-            work_mode: reply.work_mode,
-            employment: reply.employment,
-            stack: reply.stack,
-        };
-        f.sanitize();
-        Some(f)
+        extraction_from(&text, &self.model)
     }
 }
 
-/// Pull the JSON object out of a reply, even when the model wrapped it in a
-/// code fence or a sentence. Format-json mode usually prevents that; usually is
-/// not always, and the fallback costs three lines.
-fn parse_reply(text: &str) -> Option<Reply> {
-    if let Ok(r) = serde_json::from_str::<Reply>(text.trim()) {
-        return Some(r);
-    }
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    if end <= start {
-        return None;
-    }
-    serde_json::from_str::<Reply>(&text[start..=end]).ok()
-}
-
-pub fn build_enricher(cfg: &DraftCfg, client: reqwest::Client) -> Box<dyn Enricher> {
-    match cfg.provider.as_str() {
+/// Pick the reader.
+///
+/// `[llm]` is the modern section; `[draft]` is where the ollama settings used
+/// to live and still works, because a config file that stops working on
+/// upgrade is a worse sin than a slightly awkward fallback.
+pub fn build_enricher(
+    llm: &crate::config::LlmCfg,
+    draft: &DraftCfg,
+    client: reqwest::Client,
+) -> Box<dyn Enricher> {
+    match llm.provider.as_str() {
+        "openai" => {
+            if llm.api_key.is_none() {
+                // Configured but unusable. Saying which variable is missing is
+                // the difference between a five-second fix and an afternoon.
+                tracing::error!(
+                    "llm.provider is \"openai\" but no API key is set — put \
+                     OPENAI_API_KEY in .env. Falling back to heuristics."
+                );
+                return Box::new(NoEnricher);
+            }
+            Box::new(OpenAiEnricher {
+                client: crate::llm::Client::new(client, llm.clone()),
+                max_body_chars: llm.max_body_chars,
+                base_url: llm.base_url.clone(),
+            })
+        }
         "ollama" => Box::new(OllamaEnricher {
             client,
-            url: cfg.ollama_url.clone(),
-            model: cfg.ollama_model.clone(),
+            url: llm.base_url.clone(),
+            model: llm.model.clone(),
+            max_body_chars: llm.max_body_chars,
+        }),
+        // No [llm] section at all: honour the old [draft] one.
+        _ if draft.provider == "ollama" => Box::new(OllamaEnricher {
+            client,
+            url: draft.ollama_url.clone(),
+            model: draft.ollama_model.clone(),
+            max_body_chars: llm.max_body_chars,
         }),
         _ => Box::new(NoEnricher),
     }
 }
+
 
 #[cfg(test)]
 mod tests {

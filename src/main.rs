@@ -7,6 +7,7 @@ mod draft;
 mod enrich;
 mod errlog;
 mod geo;
+mod llm;
 mod model;
 mod notify;
 mod pipeline;
@@ -79,7 +80,8 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     let drafter: Arc<dyn draft::Drafter> = Arc::from(draft::build_drafter(&cfg.draft, http.clone()));
-    let enricher: Arc<dyn enrich::Enricher> = Arc::from(enrich::build_enricher(&cfg.draft, http.clone()));
+    let enricher: Arc<dyn enrich::Enricher> =
+        Arc::from(enrich::build_enricher(&cfg.llm, &cfg.draft, http.clone()));
     let (events, _) = tokio::sync::broadcast::channel::<()>(64);
 
     // config.toml seeds the settings the first time only; after that the stored
@@ -251,14 +253,16 @@ async fn main() -> anyhow::Result<()> {
     // at ingest, so the board is filterable the whole time this is working
     // through the backlog — this only sharpens it.
     if state.enricher.is_llm() {
+        tracing::info!(model = %state.enricher.describe(), "postings will be read by a model");
         let st = state.clone();
         tokio::spawn(async move {
             enrich_loop(st).await;
         });
     } else {
         tracing::info!(
-            "no model configured for enrichment; filters use the heuristic reading \
-             (set draft.provider = \"ollama\" in config.toml to sharpen them)"
+            "no model configured; scoring uses the heuristic reading (set \
+             [llm] provider = \"openai\" in config.toml and OPENAI_API_KEY in \
+             .env to have a model read each posting)"
         );
     }
 
@@ -433,35 +437,37 @@ async fn enrich_loop(state: AppState) {
             continue;
         }
 
+        let me = state.profile().await;
+
         for c in &batch {
-            let post = model::RawPost {
-                source: c.source.clone(),
-                external_id: c.urn.clone(),
-                url: c.url.clone(),
-                title: c.title.clone(),
-                company: c.company.clone(),
-                location: c.location.clone(),
-                body: c.body.clone(),
-                posted_at: c.posted_at,
-                apply: c.apply(),
-                synthetic_title: c.source == "linkedin_voyager",
-            };
+            let post = c.as_post();
 
             // Start from what is already stored and let the model refine it, so
             // a model with no opinion leaves the row exactly as it was.
             let mut facts = c.facts();
-            match state.enricher.read(&post).await {
-                Some(read) => facts.merge_from(read),
+            let read = state.enricher.read(&post, &me).await;
+            match &read {
+                Some(e) => facts.merge_from(e.facts.clone()),
                 None => tracing::debug!(id = c.id, "enricher had no opinion"),
             }
 
             let tags = tags::encode(&facts.stack);
-            if let Err(e) = db::set_facts(&state.pool, c.id, &facts, tags).await {
+            if let Err(e) = db::set_extraction(&state.pool, c.id, &facts, tags, read.as_ref()).await
+            {
                 tracing::warn!(id = c.id, %e, "enrichment writeback failed");
                 // Leave enriched_at NULL so it is retried rather than silently
                 // dropped — but sleep first, because a failing database will
                 // otherwise spin this loop.
                 tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            }
+
+            // Re-score on the new reading. Without this the model's work never
+            // reaches the number anyone looks at: the row would carry sharper
+            // facts, a required-versus-preferred split and a judgement, and
+            // still show the score the heuristics produced at ingest.
+            if let Err(e) = pipeline::rescore_one(&state, c.id).await {
+                tracing::warn!(id = c.id, %e, "re-score after enrichment failed");
             }
         }
 

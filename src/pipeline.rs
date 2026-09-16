@@ -89,7 +89,9 @@ pub async fn ingest(
     let matcher = state.matcher().await;
 
     let (score, matched, assessment) = if profile.is_usable() {
-        let a = crate::ats::assess(&profile, &facts, &post, &live);
+        // No judgement at ingest: the model reads in the background, and
+        // waiting for it here would turn a ninety-second crawl into an hour.
+        let a = crate::ats::assess(&profile, &facts, &post, &live, None);
         // `met` stands in for the old term list: what the posting asked for and
         // you have, which is a far better answer to "why did this fire" than a
         // list of words the two documents share.
@@ -213,6 +215,38 @@ pub async fn ingest(
     Ok(Outcome::Stored { score })
 }
 
+/// Re-assess one row.
+///
+/// Called after the model has read a posting, because otherwise its work never
+/// reaches the number anyone looks at: the row would carry sharper facts, a
+/// required-versus-preferred split and a judgement, and still show whatever the
+/// heuristics produced at ingest.
+///
+/// Rows you have already acted on are skipped for the same reason `rescore_all`
+/// skips them — what you sent or dismissed should keep reading as the decision
+/// you made at the time.
+pub async fn rescore_one(state: &AppState, id: i64) -> anyhow::Result<bool> {
+    let Some(c) = db::get(&state.pool, id).await? else {
+        return Ok(false);
+    };
+    if matches!(c.status.as_str(), "sent" | "applied" | "dismissed") {
+        return Ok(false);
+    }
+    let live = state.settings().await;
+    let profile = state.profile().await;
+    if !profile.is_usable() {
+        return Ok(false);
+    }
+
+    let a = crate::ats::assess(&profile, &c.facts(), &c.as_post(), &live, c.judgement());
+    let tier = crate::model::Tier::from_score(a.score, &live)
+        .map(|t| t.as_str().to_string())
+        .unwrap_or_else(|| "marginal".to_string());
+    let moved = (a.score - c.score).abs() > 0.05 || c.verdict != a.verdict;
+    db::set_assessment(&state.pool, c.id, &a, &tier, c.instant).await?;
+    Ok(moved)
+}
+
 /// Re-assess everything on the board against the current profile.
 ///
 /// Uploading a resume changes what every score means, and without this the
@@ -241,7 +275,7 @@ pub async fn rescore_all(state: &AppState) -> anyhow::Result<usize> {
         // sharpened them, and throwing that away to re-derive from the body
         // would undo work already paid for.
         let facts = c.facts();
-        let a = crate::ats::assess(&profile, &facts, &post, &live);
+        let a = crate::ats::assess(&profile, &facts, &post, &live, c.judgement());
 
         // A row that drops below the floor stays visible rather than
         // disappearing. It is history now, and silently deleting the board

@@ -73,6 +73,24 @@ bind     = "127.0.0.1:8080"
 base_url = "http://127.0.0.1:8080"
 
 # Draft engine. "template" = zero-dependency built-in. "ollama" = local LLM (free) at ollama_url.
+# The model that reads each posting.
+#
+# One section for every hosted model worth using: they all speak the OpenAI
+# chat-completions shape, so point base_url at api.openai.com, at OpenRouter, at
+# Groq, or at Ollama's own /v1 and only the model name changes.
+#
+# The key is NOT here — put OPENAI_API_KEY in .env. A key in a mounted config
+# file is a key in your shell history and your backups.
+#
+# With provider = "none" the heuristics do all the reading: the board still
+# works, the filters still fill, the scores are just blunter.
+[llm]
+provider       = "none"                        # "none" | "openai" | "ollama"
+base_url       = "https://api.openai.com/v1"
+model          = "gpt-5.4-mini"
+max_body_chars = 6000                          # how much of a posting to send
+# temperature  = 0                             # only send it if your model accepts it
+
 [draft]
 provider   = "template"
 ollama_url = "http://127.0.0.1:11434"

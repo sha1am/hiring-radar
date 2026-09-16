@@ -36,6 +36,20 @@ export interface Card {
   tier: string
   /** Names something on the instant list — shown and released on sight. */
   instant: boolean
+  /** One sentence describing the job, in the model's words. Null until read. */
+  summary: string | null
+  /** What the posting requires, and what it merely likes. */
+  must_have: string[]
+  nice_to_have: string[]
+  responsibilities: string[]
+  domain: string | null
+  red_flags: string[]
+  /** Already formatted server-side — "INR 1800k-2500k/year". */
+  salary: string | null
+  visa_sponsorship: boolean | null
+  /** The model's own 0-100 read, which may disagree with the score. */
+  llm_fit: number | null
+  llm_model: string | null
   status: string
   posted_at: number | null
   detected_at: number
@@ -132,6 +146,13 @@ export interface Status {
   rows_in_window: number
   window_hours: number
   outbox_count: number
+  llm: {
+    model: string
+    pending: number
+    read: number
+    prompt_tokens: number
+    completion_tokens: number
+  } | null
 }
 
 export interface OutboxPage {

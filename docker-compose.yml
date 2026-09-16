@@ -27,7 +27,8 @@ services:
       # survive `docker compose down`.
       - radar-data:/data
 
-    # Secrets: SMTP_PASSWORD, and LI_AT / LI_JSESSIONID if you enable voyager.
+    # Secrets: SMTP_PASSWORD, OPENAI_API_KEY, and LI_AT / LI_JSESSIONID if you
+    # enable voyager. env_file carries all of them; none belong in config.toml.
     env_file:
       - path: .env
         required: false

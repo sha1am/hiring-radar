@@ -134,8 +134,23 @@ with what you meet and what you are missing. Aggregated across the board, the
 missing list answers "what should I learn next", which is a better question than
 "what should I apply to".
 
-No model is involved. The score you see is the one the release engine acted on,
-and you can reproduce it by hand.
+Scoring itself is arithmetic — no call, no waiting — so the number on the card is
+the number the release engine acted on and you can reproduce it by hand. What a
+model changes is what goes *into* it, plus one dimension of its own:
+
+| dimension | weight | the question |
+|-----------|--------|--------------|
+| judgement | 15     | what does a model make of you against this posting? |
+
+Added on top of the hundred rather than carved out of it, and the total is
+divided by the weight actually present. Two reasons. With no model configured,
+every number on the board is exactly what it was — turning one on is the only
+thing that moves scores, not an invisible rebalancing of the five dimensions
+that were already there. And with one, fifteen out of a hundred and fifteen is
+about right for an opinion: enough to separate two postings the dimensions score
+identically, never enough to carry a job you cannot do past a stack score of
+zero. It is a dimension like any other, so it appears in the breakdown with the
+model's own sentence saying why.
 
 Postings from other departments are ruled out before any of this: recruiting,
 sales, clinical, operations and the rest arrive on the same company boards as
@@ -144,6 +159,64 @@ collect the benefit of the doubt on both and pass on years, level and location
 alone. A title carrying an engineering word as a whole word is engineering
 whatever else it says, which is what keeps "Software Engineer, Sales Platform"
 and drops "Engineering Recruiter".
+
+## Letting a model read the postings
+
+Optional, and off by default. With `[llm] provider = "none"` the heuristics do
+all the reading: the board still works, the filters still fill, the scores are
+just blunter.
+
+With a model configured, every posting gets one call — in the background, never
+on the crawl path, because inference takes seconds per posting and a crawl that
+waits for it would turn a ninety-second cycle into an hour and miss the posts it
+exists to catch. What comes back is stored in full:
+
+- **must-have versus nice-to-have.** The single biggest thing a model adds. "5+
+  years of Go" and "exposure to Kubernetes a plus" were worth exactly the same
+  before, because a flat list of technologies cannot express the difference —
+  and the difference is most of what a requirement means. A preferred
+  technology is now worth about a third of a required one and never appears in
+  the list of things you are missing: a list of things to go and learn should
+  not be padded with things the posting called a bonus.
+- **what the job involves, and what business it is in** — responsibilities and a
+  domain, both closed-vocabulary where it matters.
+- **pay, when it is stated**, formatted the way it was quoted: lakhs for rupees,
+  because every Indian posting says LPA and "3500k" is a number nobody says out
+  loud.
+- **visa sponsorship**, and **red flags** — an unpaid task, equity instead of
+  salary, ten years wanted for a mid-level title.
+- **a one-sentence summary**, which sits above the assessment on the card,
+  because "what is this job" comes before "how well does it suit you".
+- **its own 0-100 read of the fit**, with the sentence that decided it.
+- **the reply exactly as it arrived.** A schema is a guess about what will
+  matter later, and this is the only copy of what was actually said: re-reading
+  a stored reply is free, re-asking is a call per posting.
+
+The candidate goes into the prompt alongside the posting, which is what makes
+the call worth paying for — "does this want five years of Kafka" is a question
+about the text, "is this worth your evening" is a question about both.
+
+Configure it in `config.toml`:
+
+```toml
+[llm]
+provider = "openai"                     # "none" | "openai" | "ollama"
+base_url = "https://api.openai.com/v1"  # or OpenRouter, Groq, Ollama's /v1
+model    = "gpt-5.4-mini"
+```
+
+and put `OPENAI_API_KEY` in `.env` — a key in a mounted config file is a key in
+your shell history and your backups. Everything hosted speaks the same
+chat-completions shape, so pointing `base_url` somewhere else is the whole
+migration. JSON mode rather than a strict schema, because the strict one is not
+understood everywhere and the reply has to be validated in Rust regardless: a
+model *will* occasionally return a string where a number belongs, and one bad
+reply must not poison a batch.
+
+The Status tab shows which model is reading, how many postings it has got
+through, how many are queued and how many tokens it has spent. That last number
+is there because this is the only part of the system billed per posting, and a
+counter you can see is the difference between an experiment and a surprise.
 
 ## Watching for a technology
 
