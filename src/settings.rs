@@ -65,6 +65,10 @@ pub struct Settings {
     /// never judged either way — plenty of real listings don't.
     #[serde(default = "def_stack_policy")]
     pub stack_policy: String,
+    /// Which one-time corrections have already been applied to this stored row.
+    /// See `migrate`.
+    #[serde(default)]
+    pub settings_version: i64,
     /// Technologies worth interrupting you for.
     ///
     /// A posting naming one of these is shown and released the moment it is
@@ -221,6 +225,27 @@ fn def_outbox_min() -> f64 { 70.0 }
 fn def_mode() -> String { "all".into() }
 fn def_location_policy() -> String { "prefer".into() }
 fn def_stack_policy() -> String { "off".into() }
+
+/// The newest set of one-time corrections. See `Settings::migrate`.
+pub const CURRENT_VERSION: i64 = 1;
+
+/// Whether every entry names a place inside one country.
+///
+/// Conservative on purpose: an entry the gazetteer cannot resolve — "remote",
+/// an office park, a country it has never heard of — answers no, because
+/// broadening a list you cannot read is how a filter starts throwing away jobs
+/// nobody asked it to.
+fn all_in_one_country(locations: &[String], country: &str) -> bool {
+    let Some(target) = crate::geo::canonical(country) else {
+        return false;
+    };
+    !locations.is_empty()
+        && locations.iter().all(|l| {
+            crate::geo::canonical(l.trim())
+                .map(|p| crate::geo::satisfies(p, target))
+                .unwrap_or(false)
+        })
+}
 /// Go, because that is the language this radar was built to watch for. Stored
 /// rather than hardcoded, so it is one edit in Settings to change.
 fn def_instant_stack() -> Vec<String> { vec!["go".into()] }
@@ -248,6 +273,7 @@ impl Settings {
             stack: Vec::new(),
             years_experience: None,
             stack_policy: def_stack_policy(),
+            settings_version: CURRENT_VERSION,
             instant_stack: def_instant_stack(),
             dealbreakers: c.profile.dealbreakers.clone(),
             min_salary: c.profile.min_salary,
@@ -421,6 +447,51 @@ impl Settings {
         }
     }
 
+    /// One-time corrections to a row stored before a decision was made.
+    ///
+    /// Defaults only ever reach a *new* installation: every field is
+    /// `#[serde(default)]`, which is what stops a new key from resetting
+    /// someone's configuration, and is also what stops a changed default from
+    /// ever reaching the only row that exists. When a decision has to apply to
+    /// the running instance, it has to be written into the row — here, once,
+    /// visibly, and reversibly from the settings page afterwards.
+    ///
+    /// Returns whether anything changed, so the caller knows to save and to say
+    /// so in the log rather than rewriting someone's settings in silence.
+    pub fn migrate(&mut self) -> bool {
+        let mut changed = false;
+
+        // v1: the location list becomes a gate rather than a hint.
+        //
+        // "prefer" was worth a few points out of a hundred, which a strong
+        // match elsewhere trivially outweighs — so "only jobs in India" was
+        // never actually enforced, and a board asked to hold India roles held
+        // roles from everywhere with India near the top.
+        if self.settings_version < 1 {
+            if self.locations.is_empty() {
+                self.locations = vec!["india".into()];
+            } else if all_in_one_country(&self.locations, "India") {
+                // A list of Indian cities was harmless while the policy was
+                // advisory. Under a gate it is a different filter than the one
+                // it was written to express: "Bangalore, Delhi, Gurgaon, Noida"
+                // silently rejects Pune, Hyderabad and Chennai, and the person
+                // who typed it meant "India". Broadened to the country, which
+                // is what the entries add up to.
+                self.locations = vec!["india".into()];
+            }
+            if self.location_policy != "require" {
+                self.location_policy = "require".into();
+            }
+            changed = true;
+        }
+
+        if self.settings_version != CURRENT_VERSION {
+            self.settings_version = CURRENT_VERSION;
+            changed = true;
+        }
+        changed
+    }
+
     pub fn has_resume(&self) -> bool {
         self.resume.trim().len() > 200
     }
@@ -439,6 +510,59 @@ mod tests {
         let s: Settings = serde_json::from_str("{}").expect("an empty row is valid");
         assert_eq!(s.instant_stack, vec!["go".to_string()]);
         assert_eq!(s.stack_policy, "off");
+    }
+
+    #[test]
+    fn the_location_list_becomes_a_gate_once() {
+        // "prefer" is worth a few points out of a hundred, so "only India"
+        // never actually kept anything out. The migration says what a stored
+        // row could not learn from a changed default.
+        let mut s: Settings = serde_json::from_str(r#"{"locations":["india"]}"#).unwrap();
+        assert!(s.migrate());
+        assert_eq!(s.location_policy, "require");
+        assert_eq!(s.settings_version, CURRENT_VERSION);
+
+        // Idempotent: a second boot must not keep rewriting the row.
+        assert!(!s.migrate());
+    }
+
+    #[test]
+    fn a_row_with_no_locations_at_all_gets_one() {
+        let mut s: Settings = serde_json::from_str("{}").unwrap();
+        s.migrate();
+        assert_eq!(s.locations, vec!["india".to_string()]);
+        assert_eq!(s.location_policy, "require");
+    }
+
+    #[test]
+    fn a_list_of_indian_cities_under_a_gate_means_india() {
+        // This is the config.toml seed, and it was fine as a hint. As a gate it
+        // is a different filter than the one it was written to express: it
+        // rejects Pune, Hyderabad and Chennai, which nobody asked it to.
+        let mut s: Settings = serde_json::from_str(
+            r#"{"locations":["bangalore","bengaluru","delhi","gurgaon","gurugram","noida"]}"#,
+        )
+        .unwrap();
+        s.migrate();
+        assert_eq!(s.locations, vec!["india".to_string()]);
+    }
+
+    #[test]
+    fn the_migration_leaves_a_list_it_cannot_read_alone() {
+        // "remote" is not a place. Broadening a list you cannot resolve is how
+        // a filter starts throwing away jobs nobody asked it to.
+        let mut s: Settings =
+            serde_json::from_str(r#"{"locations":["bengaluru","remote"]}"#).unwrap();
+        s.migrate();
+        assert_eq!(s.locations, vec!["bengaluru".to_string(), "remote".to_string()]);
+    }
+
+    #[test]
+    fn a_list_that_spans_countries_is_never_broadened() {
+        let mut s: Settings =
+            serde_json::from_str(r#"{"locations":["bengaluru","berlin"]}"#).unwrap();
+        s.migrate();
+        assert_eq!(s.locations, vec!["bengaluru".to_string(), "berlin".to_string()]);
     }
 
     #[test]

@@ -208,6 +208,29 @@ impl Candidate {
             stack: self.tags.as_deref().map(crate::tags::decode).unwrap_or_default(),
         }
     }
+
+    /// The stored row as the post it came from.
+    ///
+    /// Three callers rebuild this — re-scoring, late drafting, and the location
+    /// purge — and every one of them has to hand the same shape to the same
+    /// functions the pipeline used, or the board ends up disagreeing with the
+    /// gate about its own rows.
+    pub fn as_post(&self) -> RawPost {
+        RawPost {
+            source: self.source.clone(),
+            external_id: self.urn.clone(),
+            url: self.url.clone(),
+            title: self.title.clone(),
+            company: self.company.clone(),
+            location: self.location.clone(),
+            body: self.body.clone(),
+            posted_at: self.posted_at,
+            apply: self.apply(),
+            // A Voyager post's title is one we invented from the body; nothing
+            // downstream of here should treat it as the employer's words.
+            synthetic_title: self.source == "linkedin_voyager",
+        }
+    }
 }
 
 impl Candidate {

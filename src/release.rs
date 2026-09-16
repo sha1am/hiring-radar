@@ -76,7 +76,7 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
         // Ensure a draft exists (strong+ were drafted at detection; this is a safety net).
         let mut cand = cand;
         if cand.draft_body.is_none() {
-            let post = to_raw(&cand);
+            let post = cand.as_post();
             let (subject, body) = state
                 .drafter
                 .draft(&post, rel, &state.cfg.profile.name, &state.cfg.profile.email)
@@ -216,23 +216,6 @@ mod tests {
         let mut s = rel();
         s.per_hour_cap = 0;
         assert!(adaptive_bar(&s, 0).is_finite());
-    }
-}
-
-/// Reconstruct a minimal RawPost from a stored candidate for late drafting.
-fn to_raw(c: &crate::model::Candidate) -> crate::model::RawPost {
-    crate::model::RawPost {
-        source: c.source.clone(),
-        external_id: c.urn.clone(),
-        url: c.url.clone(),
-        title: c.title.clone(),
-        company: c.company.clone(),
-        location: c.location.clone(),
-        body: c.body.clone(),
-        posted_at: c.posted_at,
-        apply: c.apply(),
-        // Only used to regenerate a draft; the scorer never sees this one.
-        synthetic_title: false,
     }
 }
 

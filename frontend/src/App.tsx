@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { getBootstrap, getOutbox, getRadar, getStatus } from './api'
+import { dismissVisible, getBootstrap, getOutbox, getRadar, getStatus } from './api'
 import { useEvents, useFilters, useView, type View } from './hooks'
 import type { Bootstrap, Card as CardT, OutboxPage, RadarPage, Status } from './types'
 import { Card, RadarRow } from './components/Card'
@@ -139,10 +139,12 @@ function RadarView({
   radar,
   filters,
   setFilters,
+  onChanged,
 }: {
   radar: RadarPage
   filters: ReturnType<typeof useFilters>[0]
   setFilters: ReturnType<typeof useFilters>[1]
+  onChanged: () => void
 }) {
   return (
     <section className="space-y-4">
@@ -159,6 +161,11 @@ function RadarView({
         tags={radar.tags}
         shown={radar.items.length}
         total={radar.total_in_window}
+        onDismissAll={async () => {
+          const r = await dismissVisible(filters)
+          onChanged()
+          return r.dismissed
+        }}
       />
 
       {radar.items.length === 0 ? (
@@ -373,7 +380,12 @@ export default function App() {
     ) : view === 'queue' ? (
       <QueueView queue={data.queue} reload={reload} />
     ) : (
-      <RadarView radar={data.radar} filters={filters} setFilters={setFilters} />
+      <RadarView
+        radar={data.radar}
+        filters={filters}
+        setFilters={setFilters}
+        onChanged={reload}
+      />
     )
 
   return shell(

@@ -39,6 +39,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/candidate/:id/send", post(send))
         .route("/api/candidate/:id/dismiss", post(dismiss))
+        .route("/api/radar/dismiss", post(dismiss_visible))
         .route("/api/candidate/:id/applied", post(applied))
         .route("/api/candidate/:id/draft", post(save_draft))
         .route(
@@ -496,6 +497,14 @@ async fn put_settings(
     if let Err(e) = crate::pipeline::rescore_all(&st).await {
         tracing::warn!(%e, "re-score after settings save failed");
     }
+    // Turning "only India" on has to act on the board you are looking at, not
+    // only on tomorrow's crawl — otherwise the rows you switched it on to get
+    // rid of are still sitting there afterwards.
+    match db::purge_outside_locations(&st.pool, &incoming).await {
+        Ok(n) if n > 0 => tracing::info!(removed = n, "rows outside your locations removed"),
+        Err(e) => tracing::warn!(%e, "location purge failed"),
+        _ => {}
+    }
     st.notify_ui();
     Json(settings_dto(&incoming)).into_response()
 }
@@ -547,6 +556,41 @@ async fn send(
 
 async fn dismiss(State(st): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     set_status(&st, id, "dismissed").await
+}
+
+/// Dismiss everything the board is currently showing.
+///
+/// Takes the same query string the radar was fetched with, and dismisses
+/// exactly the rows that query returns — not "everything", which on a board
+/// holding a week of history is never what anyone means. Clearing a screenful
+/// of Workday noise one row at a time is forty clicks, and the filter bar
+/// already says precisely which rows you mean.
+async fn dismiss_visible(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let live = st.settings().await;
+    let hours = window_hours(&q, &live);
+    let filter = filter_from(&q);
+    let limit = q
+        .get("limit")
+        .and_then(|l| l.trim().parse::<i64>().ok())
+        .unwrap_or(1000)
+        .clamp(1, 5000);
+
+    match db::dismiss_filtered(&st.pool, hours * 3600, &filter, limit).await {
+        Ok(n) => {
+            if n > 0 {
+                tracing::info!(dismissed = n, "board cleared from the dashboard");
+                st.notify_ui();
+            }
+            Json(serde_json::json!({ "ok": true, "dismissed": n }))
+        }
+        Err(e) => {
+            tracing::warn!(%e, "dismiss-all failed");
+            Json(serde_json::json!({ "ok": false, "dismissed": 0, "message": e.to_string() }))
+        }
+    }
 }
 
 async fn applied(State(st): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {

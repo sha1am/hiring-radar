@@ -135,6 +135,7 @@ export function FilterBar({
   tags,
   shown,
   total,
+  onDismissAll,
 }: {
   filters: F
   setFilters: (f: F) => void
@@ -148,6 +149,8 @@ export function FilterBar({
   tags: Facet[]
   shown: number
   total: number
+  /// Dismiss everything currently listed. Returns how many rows went.
+  onDismissAll: () => Promise<number>
 }) {
   const [q, setQ] = useState(filters.q)
   const debounced = useDebounced(q)
@@ -156,6 +159,13 @@ export function FilterBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debounced])
   useEffect(() => setQ(filters.q), [filters.q])
+
+  // Two-step rather than a confirm dialog: a browser confirm is a modal you
+  // dismiss without reading, and this is reversible-ish but tedious to undo.
+  // The second click states the number, which is the thing worth checking.
+  const [arming, setArming] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  useEffect(() => setArming(false), [filters])
 
   const n = activeCount(filters)
   // Open when something is already narrowing the board — usually a reload of a
@@ -318,16 +328,53 @@ export function FilterBar({
           <span className="text-slate-400">{n > 0 ? shown : total}</span>
           {n > 0 && ` of ${total}`} in the last {filters.hours}h
         </p>
-        {n > 0 && (
-          <button
-            // Clears what you're looking for. Keeps the window and the ordering,
-            // which are how you're reading the board, not what you're after.
-            onClick={() => setFilters({ ...emptyFilters(filters.hours), sort: filters.sort })}
-            className="text-xs text-slate-500 hover:text-slate-200"
-          >
-            Clear filters
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {n > 0 && (
+            <button
+              // Clears what you're looking for. Keeps the window and the ordering,
+              // which are how you're reading the board, not what you're after.
+              onClick={() => setFilters({ ...emptyFilters(filters.hours), sort: filters.sort })}
+              className="text-xs text-slate-500 hover:text-slate-200"
+            >
+              Clear filters
+            </button>
+          )}
+          {shown > 0 &&
+            (arming ? (
+              <span className="flex items-center gap-2 text-xs">
+                <span className="text-slate-400">Dismiss {shown}?</span>
+                <button
+                  disabled={clearing}
+                  onClick={async () => {
+                    setClearing(true)
+                    try {
+                      await onDismissAll()
+                    } finally {
+                      setClearing(false)
+                      setArming(false)
+                    }
+                  }}
+                  className="rounded-md bg-rose-500/15 px-2 py-0.5 text-rose-300 hover:bg-rose-500/25 disabled:opacity-50"
+                >
+                  {clearing ? 'Dismissing…' : 'Yes, dismiss'}
+                </button>
+                <button
+                  onClick={() => setArming(false)}
+                  className="text-slate-500 hover:text-slate-300"
+                >
+                  cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                onClick={() => setArming(true)}
+                title="Dismiss every row this filter is showing. Anything you have sent or applied to is left alone."
+                className="text-xs text-slate-500 hover:text-rose-300"
+              >
+                Dismiss all
+              </button>
+            ))}
+        </div>
       </div>
     </div>
   )

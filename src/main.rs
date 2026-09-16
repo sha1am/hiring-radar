@@ -85,8 +85,23 @@ async fn main() -> anyhow::Result<()> {
     // config.toml seeds the settings the first time only; after that the stored
     // row wins, so dashboard edits survive a restart.
     let live = match db::load_settings(&pool).await? {
-        Some(s) => {
+        Some(mut s) => {
             tracing::info!("settings loaded from database");
+            // One-time corrections to a row written before a decision existed.
+            // A changed default never reaches a stored row — that is what stops
+            // a new field from resetting someone's configuration — so a
+            // decision that has to apply to the running instance is written in
+            // here, once, and said out loud.
+            if s.migrate() {
+                s.sanitize();
+                db::save_settings(&pool, &s).await?;
+                tracing::info!(
+                    version = s.settings_version,
+                    policy = %s.location_policy,
+                    locations = %s.locations.join(", "),
+                    "settings migrated"
+                );
+            }
             s
         }
         None => {
@@ -135,6 +150,18 @@ async fn main() -> anyhow::Result<()> {
     {
         let live = state.settings().await;
         state.status.write().await.apply_settings(&live);
+    }
+
+    // The location gate, applied backwards. It only ever sees arrivals, so
+    // switching it on leaves the board full of exactly what you switched it on
+    // to be rid of. Before the re-score, so nothing is scored on its way out.
+    {
+        let live = state.settings().await;
+        match db::purge_outside_locations(&pool, &live).await {
+            Ok(n) if n > 0 => tracing::info!(removed = n, "rows outside your locations removed"),
+            Err(e) => tracing::warn!(%e, "location purge failed"),
+            _ => {}
+        }
     }
 
     // Bring the board onto the current scorer.

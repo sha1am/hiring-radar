@@ -75,6 +75,17 @@ export const saveDraft = (id: number, subject: string, body: string) =>
     body: JSON.stringify({ subject, body }),
   })
 
+/// Dismiss every row the board is currently showing.
+///
+/// Sends the same query string the list was fetched with, so the server
+/// dismisses exactly what you are looking at. "Everything" would be the wrong
+/// promise on a board holding a week of history.
+export const dismissVisible = (f: Filters) =>
+  req<{ ok: boolean; dismissed: number; message?: string }>(
+    `/api/radar/dismiss?${toQuery(f)}`,
+    { method: 'POST' },
+  )
+
 export const dismissCandidate = (id: number) =>
   req<{ status: string }>(`/api/candidate/${id}/dismiss`, { method: 'POST' })
 

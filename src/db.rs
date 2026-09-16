@@ -556,11 +556,16 @@ pub async fn recent_filtered(
         c
     };
 
+    // Dismissing is the one status that is a decision rather than a state a
+    // row arrived in: it means "I have dealt with this, stop showing it to me".
+    // Leaving those rows on the board makes the dismiss button look like it did
+    // nothing. They stay reachable by asking for them in the status filter.
     let sql = format!(
         "SELECT * FROM candidates
          WHERE COALESCE(posted_at, detected_at) > ?
            AND (? = '' OR source = ?)
            AND (? = '' OR status = ?)
+           AND (status != 'dismissed' OR ? = 'dismissed')
            AND (? = '' OR tier = ?)
            AND score >= ?
            AND (? = '' OR (
@@ -579,6 +584,7 @@ pub async fn recent_filtered(
     .bind(cutoff)
     .bind(&f.source)
     .bind(&f.source)
+    .bind(&f.status)
     .bind(&f.status)
     .bind(&f.status)
     .bind(&f.tier)
@@ -685,6 +691,89 @@ pub async fn prune_candidates(pool: &SqlitePool, older_than_secs: i64) -> anyhow
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
+}
+
+/// Delete rows the location gate would reject today.
+///
+/// The gate at ingest only ever looks at arrivals, so switching "only India"
+/// on leaves every posting that was stored while it was off — the board stays
+/// full of the jobs you just said you did not want, and nothing you can click
+/// explains why. This is that switch applied backwards.
+///
+/// Deleting rather than hiding, because the request is "remove them". Rows you
+/// have already acted on are left alone: what you sent or applied to is a
+/// record of something you did, not a suggestion to be withdrawn.
+pub async fn purge_outside_locations(
+    pool: &SqlitePool,
+    s: &crate::settings::Settings,
+) -> anyhow::Result<u64> {
+    if s.location_policy != "require" || s.locations.is_empty() {
+        return Ok(0);
+    }
+    let rows = sqlx::query_as::<_, Candidate>(
+        "SELECT * FROM candidates WHERE status NOT IN ('sent', 'applied')",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // The same function the pipeline uses, on a post rebuilt from the row, so
+    // the board can never disagree with the gate about what is in India.
+    let doomed: Vec<i64> = rows
+        .iter()
+        .filter(|c| {
+            crate::score::location_verdict(&c.as_post(), s)
+                == crate::score::LocationVerdict::Rejected
+        })
+        .map(|c| c.id)
+        .collect();
+
+    let mut removed = 0u64;
+    for chunk in doomed.chunks(400) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let sql = format!("DELETE FROM candidates WHERE id IN ({marks})");
+        let mut q = sqlx::query(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        removed += q.execute(pool).await?.rows_affected();
+    }
+    Ok(removed)
+}
+
+/// Dismiss everything a given board view is showing.
+///
+/// Deliberately implemented over `recent_filtered` rather than as its own
+/// DELETE with its own WHERE clause: the one thing this button must never do is
+/// act on a different set of rows than the ones you are looking at, and two
+/// copies of a twelve-clause filter would drift apart the first time either was
+/// touched.
+///
+/// Rows already sent, applied to or dismissed are skipped — there is nothing to
+/// dismiss about them, and re-stamping them would rewrite their history.
+pub async fn dismiss_filtered(
+    pool: &SqlitePool,
+    window_secs: i64,
+    f: &RadarFilter,
+    limit: i64,
+) -> anyhow::Result<u64> {
+    let rows = recent_filtered(pool, window_secs, f, limit).await?;
+    let ids: Vec<i64> = rows
+        .iter()
+        .filter(|c| !matches!(c.status.as_str(), "sent" | "applied" | "dismissed"))
+        .map(|c| c.id)
+        .collect();
+
+    let mut n = 0u64;
+    for chunk in ids.chunks(400) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let sql = format!("UPDATE candidates SET status = 'dismissed' WHERE id IN ({marks})");
+        let mut q = sqlx::query(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        n += q.execute(pool).await?.rows_affected();
+    }
+    Ok(n)
 }
 
 pub async fn get(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<Candidate>> {
@@ -1117,6 +1206,119 @@ mod tests {
     async fn candidate(pool: &SqlitePool, urn: &str) -> Candidate {
         insert(pool, urn, "strong", false).await;
         eligible(pool).await.unwrap().pop().expect("one eligible row")
+    }
+
+    async fn insert_at(pool: &SqlitePool, urn: &str, location: &str, status: &str) {
+        let n = NewCandidate {
+            urn: urn.into(),
+            source: "greenhouse".into(),
+            url: "https://example.com/job".into(),
+            title: "Backend Engineer".into(),
+            company: "Acme".into(),
+            location: Some(location.into()),
+            score: 88.0,
+            priority: 88.0,
+            tier: "strong".into(),
+            detected_at: now(),
+            expires_at: now() + 3600,
+            settle_until: now() - 1,
+            apply_kind: "url".into(),
+            ..Default::default()
+        };
+        insert_candidate(pool, &n, status).await.unwrap();
+    }
+
+    fn india_only() -> crate::settings::Settings {
+        let mut s: crate::settings::Settings = serde_json::from_str("{}").unwrap();
+        s.locations = vec!["india".into()];
+        s.location_policy = "require".into();
+        s
+    }
+
+    #[tokio::test]
+    async fn switching_on_india_only_clears_what_is_already_there() {
+        // The gate at ingest only ever sees arrivals, so without this the board
+        // keeps every posting stored while it was off — which is exactly the
+        // pile you turned it on to get rid of.
+        let (_serial, pool) = fixture().await;
+        insert_at(pool, "urn:blr", "Bengaluru, India", "scored").await;
+        insert_at(pool, "urn:nyc", "New York, United States", "scored").await;
+
+        let removed = purge_outside_locations(pool, &india_only()).await.unwrap();
+        assert_eq!(removed, 1);
+
+        let left: Vec<(String,)> = sqlx::query_as("SELECT urn FROM candidates")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].0, "urn:blr");
+    }
+
+    #[tokio::test]
+    async fn what_you_already_acted_on_is_history_and_survives() {
+        // A posting you applied to is a record of something you did, not a
+        // suggestion to be withdrawn because the filter changed.
+        let (_serial, pool) = fixture().await;
+        insert_at(pool, "urn:applied", "Berlin, Germany", "applied").await;
+        insert_at(pool, "urn:sent", "Berlin, Germany", "sent").await;
+        insert_at(pool, "urn:idle", "Berlin, Germany", "scored").await;
+
+        assert_eq!(purge_outside_locations(pool, &india_only()).await.unwrap(), 1);
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM candidates")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 2);
+    }
+
+    #[tokio::test]
+    async fn an_advisory_location_list_never_deletes_anything() {
+        let (_serial, pool) = fixture().await;
+        insert_at(pool, "urn:nyc", "New York, United States", "scored").await;
+        let mut s = india_only();
+        s.location_policy = "prefer".into();
+        assert_eq!(purge_outside_locations(pool, &s).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_dismissed_row_leaves_the_board_but_can_be_asked_for() {
+        // Otherwise "dismiss all" reads as a button that does nothing: the rows
+        // stay exactly where they were, wearing a new word.
+        let (_serial, pool) = fixture().await;
+        insert_at(pool, "urn:gone", "Bengaluru, India", "dismissed").await;
+        insert_at(pool, "urn:here", "Pune, India", "scored").await;
+
+        let visible = recent_filtered(pool, 86_400, &RadarFilter::default(), 50).await.unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].urn, "urn:here");
+
+        let asked = RadarFilter { status: "dismissed".into(), ..Default::default() };
+        let back = recent_filtered(pool, 86_400, &asked, 50).await.unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].urn, "urn:gone");
+    }
+
+    #[tokio::test]
+    async fn dismiss_all_takes_the_rows_the_filter_shows_and_no_others() {
+        let (_serial, pool) = fixture().await;
+        insert_at(pool, "urn:a", "Bengaluru, India", "scored").await;
+        insert_at(pool, "urn:b", "Pune, India", "scored").await;
+        insert_at(pool, "urn:c", "Bengaluru, India", "applied").await;
+
+        // Narrowed to Pune: one row dismissed, and the applied row untouched
+        // even though it matches nothing about the filter either way.
+        let f = RadarFilter { q: "pune".into(), ..Default::default() };
+        assert_eq!(dismiss_filtered(pool, 86_400, &f, 500).await.unwrap(), 1);
+
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT urn, status FROM candidates ORDER BY urn")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(rows[0], ("urn:a".into(), "scored".into()));
+        assert_eq!(rows[1], ("urn:b".into(), "dismissed".into()));
+        assert_eq!(rows[2], ("urn:c".into(), "applied".into()));
     }
 
     async fn insert(pool: &SqlitePool, urn: &str, tier: &str, instant: bool) {

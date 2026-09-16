@@ -236,18 +236,7 @@ pub async fn rescore_all(state: &AppState) -> anyhow::Result<usize> {
     let mut changed = 0usize;
 
     for c in &rows {
-        let post = crate::model::RawPost {
-            source: c.source.clone(),
-            external_id: c.urn.clone(),
-            url: c.url.clone(),
-            title: c.title.clone(),
-            company: c.company.clone(),
-            location: c.location.clone(),
-            body: c.body.clone(),
-            posted_at: c.posted_at,
-            apply: c.apply(),
-            synthetic_title: c.source == "linkedin_voyager",
-        };
+        let post = c.as_post();
         // The stored facts, not a fresh extraction: the LLM pass may have
         // sharpened them, and throwing that away to re-derive from the body
         // would undo work already paid for.
