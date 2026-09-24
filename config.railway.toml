@@ -1,0 +1,69 @@
+[profile]
+name        = "Shadab"
+email       = "shadab.connect17@gmail.com"
+titles      = ["backend engineer", "software engineer", "sde", "platform engineer", "golang developer"]
+keywords    = ["go", "golang", "rust", "kafka", "postgres", "kubernetes", "distributed systems", "microservices"]
+locations   = ["gurugram", "gurgaon", "bengaluru", "bangalore", "delhi", "noida"]
+remote_ok   = true
+seniority   = ["mid", "senior", "sde 2", "sde-2", "ii"]
+dealbreakers = ["unpaid", "commission only", "wordpress", "php", "sales executive"]
+
+[crawl]
+user_agent          = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+target_search_secs  = 90
+broad_search_secs   = 600
+jitter_secs         = 30
+
+[greenhouse]
+enabled = true
+boards  = ["stripe", "airbnb", "gitlab"]
+
+[[crawl.linkedin_queries]]
+keywords = "golang backend"
+location = "India"
+
+[[crawl.linkedin_queries]]
+keywords = "rust engineer"
+location = "Remote"
+
+[linkedin_voyager]
+enabled = false
+query_id = "voyagerSearchDashClusters.REPLACE_ME"
+
+[release]
+per_hour_cap        = 4
+per_poster_cap      = 1
+tick_secs           = 30
+score_floor         = 55.0
+strong_min          = 75.0
+exceptional_min     = 92.0
+settle_strong_secs  = 360
+candidate_ttl_secs  = 43200
+adaptive_threshold  = true
+adaptive_start      = 82.0
+adaptive_end        = 70.0
+
+[ntfy]
+server = "https://ntfy.sh"
+topic  = "hiring-radar-sha1am"
+
+[email]
+smtp_host = "smtp.gmail.com"
+smtp_port = 587
+smtp_user = "shadab.connect17@gmail.com"
+from      = "Hiring Radar <shadab.connect17@gmail.com>"
+
+[server]
+bind     = "0.0.0.0:8080"
+base_url = "${{RAILWAY_PUBLIC_URL}}"
+
+[llm]
+provider       = "none"
+base_url       = "https://api.openai.com/v1"
+model          = "gpt-5.4-mini"
+max_body_chars = 6000
+
+[draft]
+provider   = "template"
+ollama_url = "http://127.0.0.1:11434"
+ollama_model = "llama3.1"

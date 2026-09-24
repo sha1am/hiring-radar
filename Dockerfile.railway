@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1
+
+# ---------- frontend ----------
+FROM node:22-slim AS ui
+
+WORKDIR /ui
+
+COPY frontend/package*.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY frontend/ ./
+RUN npm run build
+
+# ---------- builder ----------
+FROM rust:1-slim-bookworm AS builder
+
+WORKDIR /app
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src \
+ && echo 'fn main() {}' > src/main.rs \
+ && cargo build --release \
+ && rm -rf src
+
+COPY src ./src
+RUN touch src/main.rs \
+ && cargo build --release \
+ && (strip target/release/hiring-radar || true)
+
+# ---------- runtime ----------
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --create-home --uid 10001 radar \
+ && mkdir -p /data \
+ && chown radar:radar /data
+
+COPY --from=builder /app/target/release/hiring-radar /usr/local/bin/hiring-radar
+COPY --from=ui /ui/dist /app/ui
+COPY companies /app/companies
+COPY config.railway.toml /app/config.toml
+
+USER radar
+WORKDIR /app
+
+ENV RADAR_CONFIG=/app/config.toml \
+    RADAR_COMPANIES_DIR=/app/companies \
+    RADAR_UI_DIR=/app/ui \
+    RADAR_DB=/data/hiring.db \
+    RADAR_BIND=0.0.0.0:8080 \
+    RUST_LOG=hiring_radar=info,tower_http=warn
+
+# Railway uses its own volume system, so we don't use VOLUME directive
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8080/api/status > /dev/null || exit 1
+
+CMD ["hiring-radar"]
