@@ -16,7 +16,6 @@ use std::collections::{HashMap, HashSet};
 /// Deliberately not an LLM: this runs on the instant path, for every post, and
 /// has to be deterministic enough that a score you see on the dashboard is the
 /// same one the release engine acted on.
-
 /// English filler plus job-posting boilerplate. Boilerplate matters more than
 /// grammar words here — "responsibilities" and "candidate" appear in every
 /// posting and in most resumes, so they are pure noise in a similarity score.

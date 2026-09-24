@@ -12,7 +12,6 @@ use crate::text::contains_word;
 /// stable, and full of aliases that no amount of cleverness would guess
 /// ("k8s" is Kubernetes, "gcp" is Google Cloud, "postgres" and "psql" and
 /// "postgresql" are one thing).
-
 /// (needle, canonical label). Multiple needles map to one label; the label is
 /// what gets stored and what the chip shows.
 const TECH: &[(&str, &str)] = &[
@@ -155,7 +154,7 @@ pub fn extract_list(items: &[String]) -> Vec<String> {
             extract(item)
         };
         for t in found {
-            if !out.iter().any(|x| *x == t) {
+            if !out.contains(&t) {
                 out.push(t);
             }
         }

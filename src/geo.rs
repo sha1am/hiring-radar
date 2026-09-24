@@ -16,7 +16,6 @@
 /// Deliberately a fixed gazetteer rather than anything clever: geocoding would
 /// be a network call on the instant path for every post, and the set of places
 /// a person filters on is small and stable.
-
 /// (needle, canonical name, country code, is_country).
 ///
 /// Order matters: longer and more specific forms first, so "new delhi" does not
