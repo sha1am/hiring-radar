@@ -1,5 +1,5 @@
-use crate::{db, notify};
 use crate::state::AppState;
+use crate::{db, notify};
 use std::collections::HashMap;
 
 /// How many times a candidate may be claimed and not delivered before it is
@@ -79,7 +79,12 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
             let post = cand.as_post();
             let (subject, body) = state
                 .drafter
-                .draft(&post, rel, &state.cfg.profile.name, &state.cfg.profile.email)
+                .draft(
+                    &post,
+                    rel,
+                    &state.cfg.profile.name,
+                    &state.cfg.profile.email,
+                )
                 .await;
             db::set_draft(&state.pool, cand.id, &subject, &body).await?;
             cand.draft_subject = Some(subject);
@@ -116,8 +121,10 @@ pub async fn run(state: &AppState) -> anyhow::Result<()> {
                 );
             } else {
                 tracing::error!(
-                    id = cand.id, failures,
-                    "nothing delivered; slot returned, will retry: {}", cand.title
+                    id = cand.id,
+                    failures,
+                    "nothing delivered; slot returned, will retry: {}",
+                    cand.title
                 );
             }
             continue;
@@ -200,7 +207,10 @@ mod tests {
         let a = adaptive_bar(&s, 2);
         let b = adaptive_bar(&s, 2);
         assert_eq!(a, b);
-        assert!((a - 80.0).abs() < 1e-9, "half the budget should be half way: {a}");
+        assert!(
+            (a - 80.0).abs() < 1e-9,
+            "half the budget should be half way: {a}"
+        );
     }
 
     #[test]

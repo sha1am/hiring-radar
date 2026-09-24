@@ -44,7 +44,10 @@ impl Scorer for LexicalScorer {
         let hay = post.haystack();
 
         // Hard filter: any dealbreaker present zeroes the post out.
-        if p.dealbreakers.iter().any(|d| hay.contains(&d.to_lowercase())) {
+        if p.dealbreakers
+            .iter()
+            .any(|d| hay.contains(&d.to_lowercase()))
+        {
             return (0.0, Vec::new());
         }
 
@@ -98,9 +101,16 @@ impl Scorer for LexicalScorer {
         // --- seniority ---
         // For a feed post the level words are in the body, not the first line.
         let level_hay: &str = if post.synthetic_title { &hay } else { &title };
-        let junior = ["intern", "internship", "junior", "fresher", "trainee", "graduate"]
-            .iter()
-            .any(|w| level_hay.contains(w));
+        let junior = [
+            "intern",
+            "internship",
+            "junior",
+            "fresher",
+            "trainee",
+            "graduate",
+        ]
+        .iter()
+        .any(|w| level_hay.contains(w));
         let senior_wanted = p.seniority.iter().any(|w| {
             let w = w.to_lowercase();
             w.contains("senior")
@@ -111,7 +121,11 @@ impl Scorer for LexicalScorer {
         });
         if senior_wanted && junior {
             s += SENIORITY_MISS;
-        } else if p.seniority.iter().any(|w| level_hay.contains(&w.to_lowercase())) {
+        } else if p
+            .seniority
+            .iter()
+            .any(|w| level_hay.contains(&w.to_lowercase()))
+        {
             s += SENIORITY_HIT;
         }
 
@@ -202,12 +216,7 @@ pub fn location_verdict(post: &RawPost, p: &Settings) -> LocationVerdict {
 /// The 0..1 content component. Resume similarity when a resume is loaded,
 /// keyword coverage otherwise, blended by `resume_weight` so you can dial
 /// between them rather than flipping.
-fn content_score(
-    post: &RawPost,
-    p: &Settings,
-    m: &Matcher,
-    hay: &str,
-) -> (f64, Vec<String>) {
+fn content_score(post: &RawPost, p: &Settings, m: &Matcher, hay: &str) -> (f64, Vec<String>) {
     let kw = keyword_coverage(p, hay);
 
     let Some(profile) = m.resume.as_ref() else {
@@ -245,8 +254,24 @@ fn keyword_coverage(p: &Settings, hay: &str) -> f64 {
 /// counts if a currency or pay word sits within ~24 characters of it.
 fn detect_salary(hay: &str) -> Option<u64> {
     const MARKERS: &[&str] = &[
-        "salary", "ctc", "lpa", "compensation", "pay", "inr", "usd", "eur", "gbp", "rs.", "rs ",
-        "₹", "$", "€", "£", "per annum", "annually", "package",
+        "salary",
+        "ctc",
+        "lpa",
+        "compensation",
+        "pay",
+        "inr",
+        "usd",
+        "eur",
+        "gbp",
+        "rs.",
+        "rs ",
+        "₹",
+        "$",
+        "€",
+        "£",
+        "per annum",
+        "annually",
+        "package",
     ];
     let bytes = hay.as_bytes();
     let mut best: Option<u64> = None;
@@ -261,7 +286,10 @@ fn detect_salary(hay: &str) -> Option<u64> {
         while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b',') {
             i += 1;
         }
-        let raw: String = hay[start..i].chars().filter(|c| c.is_ascii_digit()).collect();
+        let raw: String = hay[start..i]
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect();
         if raw.len() < 5 {
             continue;
         }
@@ -351,7 +379,9 @@ mod tests {
                     postgres and kubernetes. DM me if interested. #hiring";
 
         // Same text, once as a feed post (no usable title) and once as a listing.
-        let feed = LexicalScorer.score(&post("We are hiring!", body, true), &p, &m).0;
+        let feed = LexicalScorer
+            .score(&post("We are hiring!", body, true), &p, &m)
+            .0;
         let listing = LexicalScorer
             .score(&post("Senior Backend Engineer", body, false), &p, &m)
             .0;
@@ -455,15 +485,25 @@ mod tests {
     /// gets its own switch rather than a silent default.
     #[test]
     fn unknown_location_follows_its_own_switch() {
-        let unknown = post("We are hiring!", "Backend engineer wanted. Golang, kafka.", true);
+        let unknown = post(
+            "We are hiring!",
+            "Backend engineer wanted. Golang, kafka.",
+            true,
+        );
 
         let mut lenient = india_profile("require");
         lenient.allow_unknown_location = true;
-        assert_eq!(location_verdict(&unknown, &lenient), LocationVerdict::NoMatch);
+        assert_eq!(
+            location_verdict(&unknown, &lenient),
+            LocationVerdict::NoMatch
+        );
 
         let mut strict = india_profile("require");
         strict.allow_unknown_location = false;
-        assert_eq!(location_verdict(&unknown, &strict), LocationVerdict::Rejected);
+        assert_eq!(
+            location_verdict(&unknown, &strict),
+            LocationVerdict::Rejected
+        );
     }
 
     #[test]
@@ -593,7 +633,10 @@ mod stack_tests {
     #[test]
     fn a_ruby_job_is_a_mismatch_for_a_go_engineer() {
         let p = settings("prefer", &["go", "python"]);
-        assert_eq!(stack_verdict(&post("Ruby on Rails, Sidekiq"), &p), StackVerdict::Mismatch);
+        assert_eq!(
+            stack_verdict(&post("Ruby on Rails, Sidekiq"), &p),
+            StackVerdict::Mismatch
+        );
     }
 
     #[test]
@@ -610,7 +653,10 @@ mod stack_tests {
     #[test]
     fn require_rejects_rather_than_merely_penalising() {
         let p = settings("require", &["go"]);
-        assert_eq!(stack_verdict(&post("Java and Spring Boot"), &p), StackVerdict::Rejected);
+        assert_eq!(
+            stack_verdict(&post("Java and Spring Boot"), &p),
+            StackVerdict::Rejected
+        );
     }
 
     #[test]
@@ -638,6 +684,9 @@ mod stack_tests {
     #[test]
     fn an_empty_stack_list_disables_the_gate_entirely() {
         let p = settings("require", &[]);
-        assert_eq!(stack_verdict(&post("Ruby on Rails"), &p), StackVerdict::Unknown);
+        assert_eq!(
+            stack_verdict(&post("Ruby on Rails"), &p),
+            StackVerdict::Unknown
+        );
     }
 }

@@ -108,7 +108,11 @@ impl JobSource for Workday {
             self.crawl_target(&t, cutoff, now, &mut out).await;
         }
 
-        tracing::info!(found = out.posts.len(), tenants = entries.len(), "workday crawl");
+        tracing::info!(
+            found = out.posts.len(),
+            tenants = entries.len(),
+            "workday crawl"
+        );
         Ok(out)
     }
 }

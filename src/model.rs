@@ -234,7 +234,11 @@ impl Candidate {
             years_max: self.years_max,
             work_mode: self.work_mode.clone(),
             employment: self.employment.clone(),
-            stack: self.tags.as_deref().map(crate::tags::decode).unwrap_or_default(),
+            stack: self
+                .tags
+                .as_deref()
+                .map(crate::tags::decode)
+                .unwrap_or_default(),
             must_have: decode_list(&self.must_have),
             nice_to_have: decode_list(&self.nice_to_have),
             responsibilities: decode_list(&self.responsibilities),

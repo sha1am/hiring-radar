@@ -160,9 +160,13 @@ impl Client {
             }
             return Err(match code {
                 404 => "HTTP 404 — no such tenant or site; check the careers URL".to_string(),
-                403 => "HTTP 403 — the tenant is refusing this client; it may be geo- or bot-blocked"
-                    .to_string(),
-                422 => "HTTP 422 — the tenant rejected the query shape on the first page".to_string(),
+                403 => {
+                    "HTTP 403 — the tenant is refusing this client; it may be geo- or bot-blocked"
+                        .to_string()
+                }
+                422 => {
+                    "HTTP 422 — the tenant rejected the query shape on the first page".to_string()
+                }
                 _ => format!("HTTP {code}{}", status_hint(code)),
             });
         }

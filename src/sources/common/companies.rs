@@ -47,7 +47,11 @@ impl List {
             (None, false) => format!(
                 "{p}: {} {}",
                 self.entries.len(),
-                if self.entries.len() == 1 { "company" } else { "companies" }
+                if self.entries.len() == 1 {
+                    "company"
+                } else {
+                    "companies"
+                }
             ),
         }
     }

@@ -70,7 +70,10 @@ mod tests {
 
     #[test]
     fn first_line_skips_leading_blanks() {
-        assert_eq!(first_line("\n\n  We're hiring!  \nBackend", 40), "We're hiring!");
+        assert_eq!(
+            first_line("\n\n  We're hiring!  \nBackend", 40),
+            "We're hiring!"
+        );
     }
 
     #[test]

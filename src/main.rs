@@ -14,8 +14,8 @@ mod pipeline;
 mod release;
 mod resume;
 mod score;
-mod sources;
 mod settings;
+mod sources;
 mod state;
 mod status;
 mod tags;
@@ -24,12 +24,12 @@ mod timeparse;
 mod web;
 
 use crate::config::Config;
+use crate::settings::Settings;
 use crate::sources::greenhouse::Greenhouse;
 use crate::sources::lever::Lever;
 use crate::sources::linkedin::{LinkedInGuest, Voyager};
 use crate::sources::workday::Workday;
 use crate::sources::JobSource;
-use crate::settings::Settings;
 use crate::state::AppState;
 use rand::Rng;
 use std::sync::Arc;
@@ -79,7 +79,8 @@ async fn main() -> anyhow::Result<()> {
         ))
         .build()?;
 
-    let drafter: Arc<dyn draft::Drafter> = Arc::from(draft::build_drafter(&cfg.draft, http.clone()));
+    let drafter: Arc<dyn draft::Drafter> =
+        Arc::from(draft::build_drafter(&cfg.draft, http.clone()));
     let enricher: Arc<dyn enrich::Enricher> =
         Arc::from(enrich::build_enricher(&cfg.llm, &cfg.draft, http.clone()));
     let (events, _) = tokio::sync::broadcast::channel::<()>(64);
@@ -202,9 +203,18 @@ async fn main() -> anyhow::Result<()> {
     // settings on every pass and no-ops when disabled. Enabling a source from
     // the dashboard therefore takes effect on its next tick, with no restart.
     let sources: Vec<(Box<dyn JobSource>, u64)> = vec![
-        (Box::new(Greenhouse::new(http.clone())), cfg.crawl.broad_search_secs),
-        (Box::new(Lever::new(http.clone())), cfg.crawl.broad_search_secs),
-        (Box::new(LinkedInGuest::new(http.clone())), cfg.crawl.target_search_secs),
+        (
+            Box::new(Greenhouse::new(http.clone())),
+            cfg.crawl.broad_search_secs,
+        ),
+        (
+            Box::new(Lever::new(http.clone())),
+            cfg.crawl.broad_search_secs,
+        ),
+        (
+            Box::new(LinkedInGuest::new(http.clone())),
+            cfg.crawl.target_search_secs,
+        ),
         (
             Box::new(Voyager::new(
                 http.clone(),
@@ -216,7 +226,10 @@ async fn main() -> anyhow::Result<()> {
         // Workday listings are formal requisitions that sit open for weeks, so
         // this rides the slow tick. Polling it as often as the feed would mean
         // hundreds of requests an hour to learn nothing new.
-        (Box::new(Workday::new(http.clone())), cfg.crawl.broad_search_secs),
+        (
+            Box::new(Workday::new(http.clone())),
+            cfg.crawl.broad_search_secs,
+        ),
     ];
 
     // ---- spawn a crawl loop per source ----

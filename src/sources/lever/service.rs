@@ -54,8 +54,11 @@ impl JobSource for Lever {
                 Ok(postings) => {
                     out.ok(format!("{slug}: {} jobs", postings.len()));
                     let company = parse::company_for(slug);
-                    out.posts
-                        .extend(postings.into_iter().map(|p| parse::to_post(slug, &company, p)));
+                    out.posts.extend(
+                        postings
+                            .into_iter()
+                            .map(|p| parse::to_post(slug, &company, p)),
+                    );
                 }
             }
         }

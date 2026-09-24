@@ -64,21 +64,53 @@ pub struct Facts {
 /// The closed vocabulary for `domain`. Closed for the same reason `ROLES` is:
 /// a free-text industry produces forty spellings of "fintech".
 pub const DOMAINS: &[&str] = &[
-    "fintech", "ecommerce", "logistics", "healthtech", "edtech", "gaming",
-    "adtech", "devtools", "infrastructure", "data", "security", "social",
-    "travel", "mobility", "enterprise", "consulting", "other",
+    "fintech",
+    "ecommerce",
+    "logistics",
+    "healthtech",
+    "edtech",
+    "gaming",
+    "adtech",
+    "devtools",
+    "infrastructure",
+    "data",
+    "security",
+    "social",
+    "travel",
+    "mobility",
+    "enterprise",
+    "consulting",
+    "other",
 ];
 
 /// The closed vocabulary for `role`. Closed on purpose: filters are only useful
 /// if the same job lands under the same label every time, and a free-text role
 /// produces forty spellings of "backend".
 pub const ROLES: &[&str] = &[
-    "backend", "frontend", "fullstack", "mobile", "devops", "sre", "data",
-    "ml", "security", "qa", "embedded", "engineering-manager",
+    "backend",
+    "frontend",
+    "fullstack",
+    "mobile",
+    "devops",
+    "sre",
+    "data",
+    "ml",
+    "security",
+    "qa",
+    "embedded",
+    "engineering-manager",
 ];
 
 /// The closed vocabulary for `level`.
-pub const LEVELS: &[&str] = &["intern", "junior", "mid", "senior", "staff", "principal", "manager"];
+pub const LEVELS: &[&str] = &[
+    "intern",
+    "junior",
+    "mid",
+    "senior",
+    "staff",
+    "principal",
+    "manager",
+];
 
 pub const WORK_MODES: &[&str] = &["remote", "hybrid", "onsite"];
 pub const EMPLOYMENT: &[&str] = &["full-time", "contract", "internship"];
@@ -100,7 +132,11 @@ impl Facts {
         // A model asked for a list will occasionally return an essay in one
         // element. These are shown on a card and matched as phrases; neither
         // survives a paragraph.
-        for list in [&mut self.must_have, &mut self.nice_to_have, &mut self.responsibilities] {
+        for list in [
+            &mut self.must_have,
+            &mut self.nice_to_have,
+            &mut self.responsibilities,
+        ] {
             for item in list.iter_mut() {
                 *item = item.trim().trim_matches('.').chars().take(80).collect();
             }
@@ -205,36 +241,187 @@ impl Facts {
 /// the *title* first wins, because the title is what the employer chose to call
 /// it; the body is only consulted when the title says nothing useful.
 const ROLE_RULES: &[(&str, &[&str])] = &[
-    ("engineering-manager", &["engineering manager", "em, ", "team lead", "tech lead manager"]),
-    ("ml", &["machine learning", "ml engineer", "deep learning", "nlp ", "computer vision", "mlops", "ai engineer"]),
-    ("data", &["data engineer", "data platform", "analytics engineer", "etl", "data warehouse", "bi engineer"]),
-    ("sre", &["site reliability", "sre", "reliability engineer", "production engineer"]),
+    (
+        "engineering-manager",
+        &[
+            "engineering manager",
+            "em, ",
+            "team lead",
+            "tech lead manager",
+        ],
+    ),
+    (
+        "ml",
+        &[
+            "machine learning",
+            "ml engineer",
+            "deep learning",
+            "nlp ",
+            "computer vision",
+            "mlops",
+            "ai engineer",
+        ],
+    ),
+    (
+        "data",
+        &[
+            "data engineer",
+            "data platform",
+            "analytics engineer",
+            "etl",
+            "data warehouse",
+            "bi engineer",
+        ],
+    ),
+    (
+        "sre",
+        &[
+            "site reliability",
+            "sre",
+            "reliability engineer",
+            "production engineer",
+        ],
+    ),
     // The tool names here only ever fire on the *body* pass, because a titled
     // role already matched on the title. So "Backend Engineer" whose body
     // mentions Kubernetes stays backend, while a bare "Engineer, Platform Team"
     // gets labelled from what it actually describes.
-    ("devops", &["devops", "platform engineer", "infrastructure engineer", "cloud engineer", "kubernetes", "terraform", "ci/cd"]),
-    ("security", &["security engineer", "appsec", "infosec", "penetration test", "security analyst"]),
-    ("qa", &["qa engineer", "test engineer", "sdet", "quality assurance", "automation test"]),
-    ("embedded", &["embedded", "firmware", "rtos", "device driver"]),
-    ("mobile", &["android", "ios engineer", "mobile engineer", "react native", "flutter"]),
+    (
+        "devops",
+        &[
+            "devops",
+            "platform engineer",
+            "infrastructure engineer",
+            "cloud engineer",
+            "kubernetes",
+            "terraform",
+            "ci/cd",
+        ],
+    ),
+    (
+        "security",
+        &[
+            "security engineer",
+            "appsec",
+            "infosec",
+            "penetration test",
+            "security analyst",
+        ],
+    ),
+    (
+        "qa",
+        &[
+            "qa engineer",
+            "test engineer",
+            "sdet",
+            "quality assurance",
+            "automation test",
+        ],
+    ),
+    (
+        "embedded",
+        &["embedded", "firmware", "rtos", "device driver"],
+    ),
+    (
+        "mobile",
+        &[
+            "android",
+            "ios engineer",
+            "mobile engineer",
+            "react native",
+            "flutter",
+        ],
+    ),
     ("fullstack", &["full stack", "full-stack", "fullstack"]),
-    ("frontend", &["frontend", "front-end", "front end", "ui engineer", "web developer"]),
-    ("backend", &["backend", "back-end", "back end", "server side", "api engineer", "distributed systems", "microservices"]),
+    (
+        "frontend",
+        &[
+            "frontend",
+            "front-end",
+            "front end",
+            "ui engineer",
+            "web developer",
+        ],
+    ),
+    (
+        "backend",
+        &[
+            "backend",
+            "back-end",
+            "back end",
+            "server side",
+            "api engineer",
+            "distributed systems",
+            "microservices",
+        ],
+    ),
 ];
 
 const LEVEL_RULES: &[(&str, &[&str])] = &[
     ("intern", &["intern", "internship", "trainee", "apprentice"]),
-    ("principal", &["principal", "distinguished", "architect", "fellow"]),
-    ("staff", &["staff engineer", "staff software", "sde iii", "sde 3", "sde-3", "l6", "senior staff"]),
-    ("manager", &["engineering manager", "people manager", "team manager"]),
-    ("senior", &["senior", "sr.", "sr ", "lead ", "sde ii", "sde 2", "sde-2", "l5"]),
-    ("junior", &["junior", "jr.", "fresher", "graduate engineer", "entry level", "entry-level", "sde i", "sde 1", "sde-1"]),
+    (
+        "principal",
+        &["principal", "distinguished", "architect", "fellow"],
+    ),
+    (
+        "staff",
+        &[
+            "staff engineer",
+            "staff software",
+            "sde iii",
+            "sde 3",
+            "sde-3",
+            "l6",
+            "senior staff",
+        ],
+    ),
+    (
+        "manager",
+        &["engineering manager", "people manager", "team manager"],
+    ),
+    (
+        "senior",
+        &[
+            "senior", "sr.", "sr ", "lead ", "sde ii", "sde 2", "sde-2", "l5",
+        ],
+    ),
+    (
+        "junior",
+        &[
+            "junior",
+            "jr.",
+            "fresher",
+            "graduate engineer",
+            "entry level",
+            "entry-level",
+            "sde i",
+            "sde 1",
+            "sde-1",
+        ],
+    ),
 ];
 
-const REMOTE_WORDS: &[&str] = &["fully remote", "100% remote", "remote-first", "work from home", "wfh", "remote"];
-const HYBRID_WORDS: &[&str] = &["hybrid", "days in office", "days a week in", "flexible office"];
-const ONSITE_WORDS: &[&str] = &["on-site", "onsite", "in office", "in-office", "office-based"];
+const REMOTE_WORDS: &[&str] = &[
+    "fully remote",
+    "100% remote",
+    "remote-first",
+    "work from home",
+    "wfh",
+    "remote",
+];
+const HYBRID_WORDS: &[&str] = &[
+    "hybrid",
+    "days in office",
+    "days a week in",
+    "flexible office",
+];
+const ONSITE_WORDS: &[&str] = &[
+    "on-site",
+    "onsite",
+    "in office",
+    "in-office",
+    "office-based",
+];
 
 /// Disciplines that are not engineering at all.
 ///
@@ -250,32 +437,178 @@ const ONSITE_WORDS: &[&str] = &["on-site", "onsite", "in office", "in-office", "
 /// the engineering JDs large companies write, and "sales platform" is a thing
 /// backend engineers spend careers on.
 const OFF_DISCIPLINE: &[(&str, &[&str])] = &[
-    ("recruiting", &["recruiter", "recruiting", "recruitment", "talent acquisition", "talent partner",
-                     "human resources", "hrbp", "hr business partner", "hr generalist", "hr operations",
-                     "hr manager", "people partner", "people operations", "payroll", "sourcer"]),
-    ("sales", &["sales", "account executive", "account manager", "business development",
-                "inside sales", "key account", "bdr", "sdr"]),
-    ("marketing", &["marketing", "seo", "copywriter", "content writer", "social media",
-                    "brand manager", "public relations", "communications manager"]),
-    ("finance", &["accountant", "accounting", "accounts payable", "accounts receivable",
-                  "financial analyst", "controller", "auditor", "audit", "bookkeeper",
-                  "taxation", "treasury", "billing specialist", "underwriter", "actuary"]),
-    ("legal", &["counsel", "paralegal", "attorney", "compliance officer", "legal manager"]),
-    ("support", &["customer support", "customer service", "customer success", "help desk",
-                  "service desk", "call center", "call centre", "telecaller", "collections executive"]),
-    ("operations", &["delivery executive", "delivery driver", "truck driver", "rider", "warehouse",
-                     "logistics executive", "store manager", "field executive", "field officer",
-                     "housekeeping", "security guard", "technician", "procurement",
-                     "operations executive", "operations associate", "branch manager"]),
-    ("clinical", &["nurse", "nursing", "physician", "clinical", "pharmacist", "therapist",
-                   "medical coder", "radiologist", "dentist", "caregiver", "phlebotomist"]),
-    ("design", &["graphic designer", "visual designer", "ux designer", "ui designer",
-                 "product designer", "ux researcher", "illustrator", "motion designer"]),
-    ("product", &["product manager", "program manager", "project manager", "scrum master",
-                  "product owner", "business analyst", "delivery manager"]),
-    ("teaching", &["teacher", "instructor", "tutor", "faculty", "professor", "trainer", "curriculum"]),
-    ("consulting", &["business consultant", "management consultant", "strategy consultant",
-                     "research associate"]),
+    (
+        "recruiting",
+        &[
+            "recruiter",
+            "recruiting",
+            "recruitment",
+            "talent acquisition",
+            "talent partner",
+            "human resources",
+            "hrbp",
+            "hr business partner",
+            "hr generalist",
+            "hr operations",
+            "hr manager",
+            "people partner",
+            "people operations",
+            "payroll",
+            "sourcer",
+        ],
+    ),
+    (
+        "sales",
+        &[
+            "sales",
+            "account executive",
+            "account manager",
+            "business development",
+            "inside sales",
+            "key account",
+            "bdr",
+            "sdr",
+        ],
+    ),
+    (
+        "marketing",
+        &[
+            "marketing",
+            "seo",
+            "copywriter",
+            "content writer",
+            "social media",
+            "brand manager",
+            "public relations",
+            "communications manager",
+        ],
+    ),
+    (
+        "finance",
+        &[
+            "accountant",
+            "accounting",
+            "accounts payable",
+            "accounts receivable",
+            "financial analyst",
+            "controller",
+            "auditor",
+            "audit",
+            "bookkeeper",
+            "taxation",
+            "treasury",
+            "billing specialist",
+            "underwriter",
+            "actuary",
+        ],
+    ),
+    (
+        "legal",
+        &[
+            "counsel",
+            "paralegal",
+            "attorney",
+            "compliance officer",
+            "legal manager",
+        ],
+    ),
+    (
+        "support",
+        &[
+            "customer support",
+            "customer service",
+            "customer success",
+            "help desk",
+            "service desk",
+            "call center",
+            "call centre",
+            "telecaller",
+            "collections executive",
+        ],
+    ),
+    (
+        "operations",
+        &[
+            "delivery executive",
+            "delivery driver",
+            "truck driver",
+            "rider",
+            "warehouse",
+            "logistics executive",
+            "store manager",
+            "field executive",
+            "field officer",
+            "housekeeping",
+            "security guard",
+            "technician",
+            "procurement",
+            "operations executive",
+            "operations associate",
+            "branch manager",
+        ],
+    ),
+    (
+        "clinical",
+        &[
+            "nurse",
+            "nursing",
+            "physician",
+            "clinical",
+            "pharmacist",
+            "therapist",
+            "medical coder",
+            "radiologist",
+            "dentist",
+            "caregiver",
+            "phlebotomist",
+        ],
+    ),
+    (
+        "design",
+        &[
+            "graphic designer",
+            "visual designer",
+            "ux designer",
+            "ui designer",
+            "product designer",
+            "ux researcher",
+            "illustrator",
+            "motion designer",
+        ],
+    ),
+    (
+        "product",
+        &[
+            "product manager",
+            "program manager",
+            "project manager",
+            "scrum master",
+            "product owner",
+            "business analyst",
+            "delivery manager",
+        ],
+    ),
+    (
+        "teaching",
+        &[
+            "teacher",
+            "instructor",
+            "tutor",
+            "faculty",
+            "professor",
+            "trainer",
+            "curriculum",
+        ],
+    ),
+    (
+        "consulting",
+        &[
+            "business consultant",
+            "management consultant",
+            "strategy consultant",
+            "research associate",
+        ],
+    ),
 ];
 
 /// Words that mean the posting is for an engineer whatever else the title says.
@@ -284,8 +617,20 @@ const OFF_DISCIPLINE: &[(&str, &[&str])] = &[
 /// "engineer", so "Engineering Recruiter" stays a recruiting job while
 /// "Software Engineer, Sales Platform" stays an engineering one.
 const ENGINEERING_WORDS: &[&str] = &[
-    "engineer", "engineers", "developer", "developers", "programmer", "sde", "sdet", "sre",
-    "devops", "architect", "scientist", "technologist", "coder", "hacker",
+    "engineer",
+    "engineers",
+    "developer",
+    "developers",
+    "programmer",
+    "sde",
+    "sdet",
+    "sre",
+    "devops",
+    "architect",
+    "scientist",
+    "technologist",
+    "coder",
+    "hacker",
 ];
 
 /// Whether a title says "engineer" in one of the ways titles say it.
@@ -359,8 +704,8 @@ pub fn heuristic(post: &RawPost) -> Facts {
     // Title first: it is what the employer chose to call the job. The body
     // mentions every adjacent discipline and would tag a backend role as "data"
     // for saying the word "pipeline".
-    let role = first_match(&format!(" {title} "), ROLE_RULES)
-        .or_else(|| first_match(&hay, ROLE_RULES));
+    let role =
+        first_match(&format!(" {title} "), ROLE_RULES).or_else(|| first_match(&hay, ROLE_RULES));
 
     // Level, on the other hand, is only trustworthy from the title — a body
     // saying "you'll work with senior engineers" is not a senior req.
@@ -595,7 +940,8 @@ fn prompt(post: &RawPost, me: &crate::ats::Profile, max_body: usize) -> (String,
         domains = DOMAINS.join(", "),
     );
 
-    let user = format!(
+    let user =
+        format!(
         "CANDIDATE\nExperience: {years}\nLevel: {level}\nDisciplines: {roles}\nStack: {stack}\n\n\
          POSTING\nTitle: {title}\nCompany: {company}\nLocation: {location}\n\n{body}",
         years = me
@@ -950,7 +1296,6 @@ pub fn build_enricher(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -990,7 +1335,10 @@ mod tests {
     #[test]
     fn the_highest_floor_wins_when_several_are_stated() {
         // "2+ years of Python, 5+ years overall" is a five-year job.
-        assert_eq!(years("2+ years of python and 5+ years overall"), (Some(5), None));
+        assert_eq!(
+            years("2+ years of python and 5+ years overall"),
+            (Some(5), None)
+        );
     }
 
     #[test]
@@ -1005,21 +1353,35 @@ mod tests {
 
     #[test]
     fn the_body_is_used_when_the_title_says_nothing() {
-        let f = heuristic(&post("Engineer, Platform Team", "Kubernetes, Terraform, CI/CD."));
+        let f = heuristic(&post(
+            "Engineer, Platform Team",
+            "Kubernetes, Terraform, CI/CD.",
+        ));
         assert_eq!(f.role.as_deref(), Some("devops"));
     }
 
     #[test]
     fn level_comes_only_from_the_title() {
         // "you'll work with senior engineers" is not a senior req.
-        let f = heuristic(&post("Backend Engineer", "You will work with senior engineers."));
+        let f = heuristic(&post(
+            "Backend Engineer",
+            "You will work with senior engineers.",
+        ));
         assert_eq!(f.level, None);
-        assert_eq!(heuristic(&post("Staff Engineer, Infra", "")).level.as_deref(), Some("staff"));
+        assert_eq!(
+            heuristic(&post("Staff Engineer, Infra", ""))
+                .level
+                .as_deref(),
+            Some("staff")
+        );
     }
 
     #[test]
     fn hybrid_beats_remote_because_hybrid_posts_say_remote() {
-        let f = heuristic(&post("Backend Engineer", "Hybrid — 3 days in office, 2 days remote."));
+        let f = heuristic(&post(
+            "Backend Engineer",
+            "Hybrid — 3 days in office, 2 days remote.",
+        ));
         assert_eq!(f.work_mode.as_deref(), Some("hybrid"));
     }
 
@@ -1079,8 +1441,9 @@ mod tests {
 
     #[test]
     fn a_fenced_or_chatty_reply_still_parses() {
-        let r = parse_reply("Here you go:\n```json\n{\"role\":\"backend\",\"years_min\":\"5+\"}\n```")
-            .expect("should recover the object");
+        let r =
+            parse_reply("Here you go:\n```json\n{\"role\":\"backend\",\"years_min\":\"5+\"}\n```")
+                .expect("should recover the object");
         assert_eq!(r.role.as_deref(), Some("backend"));
         assert_eq!(r.years_min, Some(5));
     }
@@ -1093,7 +1456,14 @@ mod tests {
 
     #[test]
     fn year_labels_read_the_way_a_listing_does() {
-        let f = |lo, hi| Facts { years_min: lo, years_max: hi, ..Default::default() }.years_label();
+        let f = |lo, hi| {
+            Facts {
+                years_min: lo,
+                years_max: hi,
+                ..Default::default()
+            }
+            .years_label()
+        };
         assert_eq!(f(Some(5), None).as_deref(), Some("5+ yrs"));
         assert_eq!(f(Some(3), Some(5)).as_deref(), Some("3\u{2013}5 yrs"));
         assert_eq!(f(None, None), None);
@@ -1102,9 +1472,18 @@ mod tests {
     #[test]
     fn the_jobs_that_arrive_with_the_engineering_ones_are_named() {
         // One board per company means the whole payroll comes through it.
-        assert_eq!(off_discipline("Senior HR Business Partner"), Some("recruiting"));
-        assert_eq!(off_discipline("Talent Acquisition Specialist"), Some("recruiting"));
-        assert_eq!(off_discipline("Account Executive, Enterprise"), Some("sales"));
+        assert_eq!(
+            off_discipline("Senior HR Business Partner"),
+            Some("recruiting")
+        );
+        assert_eq!(
+            off_discipline("Talent Acquisition Specialist"),
+            Some("recruiting")
+        );
+        assert_eq!(
+            off_discipline("Account Executive, Enterprise"),
+            Some("sales")
+        );
         assert_eq!(off_discipline("Registered Nurse - ICU"), Some("clinical"));
         assert_eq!(off_discipline("Technical Program Manager"), Some("product"));
         assert_eq!(off_discipline("Warehouse Associate"), Some("operations"));
@@ -1115,7 +1494,10 @@ mod tests {
         // The whole reason the guard matches whole words: half of what an
         // engineer is hired to build is named after another department.
         assert_eq!(off_discipline("Software Engineer, Sales Platform"), None);
-        assert_eq!(off_discipline("Backend Developer - Marketing Technology"), None);
+        assert_eq!(
+            off_discipline("Backend Developer - Marketing Technology"),
+            None
+        );
         assert_eq!(off_discipline("Data Scientist, Clinical Research"), None);
         assert_eq!(off_discipline("Staff Engineer, Payments & Billing"), None);
     }
@@ -1124,7 +1506,10 @@ mod tests {
     fn engineering_recruiter_is_still_a_recruiter() {
         // "engineering" is not "engineer", and this is the case that decides it.
         assert_eq!(off_discipline("Engineering Recruiter"), Some("recruiting"));
-        assert_eq!(off_discipline("Technical Recruiter, Engineering"), Some("recruiting"));
+        assert_eq!(
+            off_discipline("Technical Recruiter, Engineering"),
+            Some("recruiting")
+        );
     }
 
     #[test]

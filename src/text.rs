@@ -11,8 +11,8 @@ fn boundary(hay: &str, start: usize, end: usize) -> bool {
             .next_back()
             .map(is_word_char)
             .unwrap_or(false);
-    let after_ok = end >= hay.len()
-        || !hay[end..].chars().next().map(is_word_char).unwrap_or(false);
+    let after_ok =
+        end >= hay.len() || !hay[end..].chars().next().map(is_word_char).unwrap_or(false);
     before_ok && after_ok
 }
 

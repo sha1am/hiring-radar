@@ -162,7 +162,9 @@ const REMOTE_HINTS: &[&str] = &[
 /// which is honest: it is somewhere, we know where, and it isn't one of the
 /// places you sort by. A place we can't resolve at all gets no region, and the
 /// filter leaves those alone rather than hiding them.
-pub const REGIONS: &[&str] = &["india", "gulf", "sea", "apac", "europe", "americas", "other"];
+pub const REGIONS: &[&str] = &[
+    "india", "gulf", "sea", "apac", "europe", "americas", "other",
+];
 
 const REGION_OF: &[(&str, &[&str])] = &[
     ("india", &["IN"]),
@@ -173,7 +175,10 @@ const REGION_OF: &[(&str, &[&str])] = &[
     ("apac", &["JP", "AU", "NZ", "HK", "CN", "KR", "TW"]),
     (
         "europe",
-        &["GB", "IE", "DE", "NL", "FR", "CH", "SE", "NO", "DK", "FI", "PL", "PT", "ES", "IT", "CZ", "RO", "AT", "BE"],
+        &[
+            "GB", "IE", "DE", "NL", "FR", "CH", "SE", "NO", "DK", "FI", "PL", "PT", "ES", "IT",
+            "CZ", "RO", "AT", "BE",
+        ],
     ),
     ("americas", &["US", "CA", "MX", "BR", "AR", "CL"]),
 ];
@@ -281,7 +286,14 @@ mod tests {
     fn the_gulf_is_more_than_dubai() {
         // It was exactly Dubai before the region filter existed, which made
         // "show me Gulf jobs" quietly mean "show me Dubai jobs".
-        for city in ["Riyadh", "Doha", "Abu Dhabi", "Manama", "Muscat", "Kuwait City"] {
+        for city in [
+            "Riyadh",
+            "Doha",
+            "Abu Dhabi",
+            "Manama",
+            "Muscat",
+            "Kuwait City",
+        ] {
             assert_eq!(region_of(city), Some("gulf"), "{city} is not in the Gulf");
         }
     }
@@ -329,7 +341,10 @@ mod tests {
 
     #[test]
     fn finds_indian_cities_in_prose() {
-        assert_eq!(infer("our Bengaluru team is growing").as_deref(), Some("Bengaluru"));
+        assert_eq!(
+            infer("our Bengaluru team is growing").as_deref(),
+            Some("Bengaluru")
+        );
         assert_eq!(infer("based out of Gurgaon").as_deref(), Some("Gurugram"));
     }
 

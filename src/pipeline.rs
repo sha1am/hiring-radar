@@ -1,8 +1,8 @@
 use crate::model::{now, RawPost, Tier};
 use crate::resume::tokenize;
-use crate::status::Outcome;
 use crate::score::{priority, LexicalScorer, Scorer};
 use crate::state::AppState;
+use crate::status::Outcome;
 use crate::{classify, db};
 
 /// Turn one freshly-detected post into a scored candidate.
@@ -12,11 +12,7 @@ use crate::{classify, db};
 /// so the radar has history to show, but lands in 'backfilled' status, which
 /// `db::eligible` excludes — so it can never fire a notification. Without this
 /// the dashboard is empty until something new is posted.
-pub async fn ingest(
-    state: &AppState,
-    post: RawPost,
-    backfill: bool,
-) -> anyhow::Result<Outcome> {
+pub async fn ingest(state: &AppState, post: RawPost, backfill: bool) -> anyhow::Result<Outcome> {
     // 1. Is this actually a hiring post?
     if !classify::is_hiring(&post) {
         return Ok(Outcome::NotHiring);
@@ -113,12 +109,10 @@ pub async fn ingest(
     //    still a Go role you wanted to see — so the instant list is checked
     //    against the technologies named in the posting and, when it hits, the
     //    posting skips the floor and the settling window entirely.
-    let watched = live.instant_stack.iter().find(|w| {
-        facts
-            .stack
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case(w.trim()))
-    });
+    let watched = live
+        .instant_stack
+        .iter()
+        .find(|w| facts.stack.iter().any(|t| t.eq_ignore_ascii_case(w.trim())));
 
     // 5. Tier — below the floor is dropped entirely (never stored), unless it
     //    is something you are watching for, in which case the floor is the
@@ -143,17 +137,21 @@ pub async fn ingest(
     // 5. Draft-ahead for anything that could fire, so the draft is ready on arrival.
     //    Backfill can't fire, so drafting it would be wasted work (and, with the
     //    ollama drafter, a very slow first crawl).
-    let (draft_subject, draft_body) = if !backfill
-        && (watched.is_some() || matches!(tier, Tier::Exceptional | Tier::Strong))
-    {
-        let (s, b) = state
-            .drafter
-            .draft(&post, &live, &state.cfg.profile.name, &state.cfg.profile.email)
-            .await;
-        (Some(s), Some(b))
-    } else {
-        (None, None)
-    };
+    let (draft_subject, draft_body) =
+        if !backfill && (watched.is_some() || matches!(tier, Tier::Exceptional | Tier::Strong)) {
+            let (s, b) = state
+                .drafter
+                .draft(
+                    &post,
+                    &live,
+                    &state.cfg.profile.name,
+                    &state.cfg.profile.email,
+                )
+                .await;
+            (Some(s), Some(b))
+        } else {
+            (None, None)
+        };
 
     let nc = db::NewCandidate {
         urn: post.urn(),
@@ -170,7 +168,11 @@ pub async fn ingest(
         posted_at: post.posted_at,
         expires_at,
         settle_until,
-        match_terms: if matched.is_empty() { None } else { Some(matched.join(", ")) },
+        match_terms: if matched.is_empty() {
+            None
+        } else {
+            Some(matched.join(", "))
+        },
         tags: crate::tags::encode(&facts.stack),
         role: facts.role.clone(),
         level: facts.level.clone(),
@@ -183,7 +185,9 @@ pub async fn ingest(
         // filed under Europe on a bad day.
         verdict: assessment.as_ref().and_then(|a| a.verdict.clone()),
         reason: assessment.as_ref().map(|a| a.reason.clone()),
-        missing: assessment.as_ref().and_then(|a| crate::tags::encode(&a.missing)),
+        missing: assessment
+            .as_ref()
+            .and_then(|a| crate::tags::encode(&a.missing)),
         dimensions: assessment
             .as_ref()
             .and_then(|a| serde_json::to_string(&a.dimensions).ok()),
@@ -298,6 +302,10 @@ pub async fn rescore_all(state: &AppState) -> anyhow::Result<usize> {
         db::set_assessment(&state.pool, c.id, &a, &tier, instant).await?;
     }
 
-    tracing::info!(rows = rows.len(), changed, "board re-scored against the profile");
+    tracing::info!(
+        rows = rows.len(),
+        changed,
+        "board re-scored against the profile"
+    );
     Ok(changed)
 }

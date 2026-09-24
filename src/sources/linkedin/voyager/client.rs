@@ -54,7 +54,10 @@ impl Client {
             .header("x-restli-protocol-version", "2.0.0")
             .header("x-li-lang", "en_US")
             .header("user-agent", &self.user_agent)
-            .header("referer", "https://www.linkedin.com/search/results/content/")
+            .header(
+                "referer",
+                "https://www.linkedin.com/search/results/content/",
+            )
             .send()
             .await
             .map_err(|e| format!("unreachable — {}", brief(&e)))?;

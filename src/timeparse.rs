@@ -131,7 +131,10 @@ mod tests {
         assert_eq!(from_linkedin_urn(""), None);
         // A plainly wrong bit layout must fail the plausibility gate, not
         // silently produce a date in the far future.
-        assert_eq!(from_linkedin_urn("urn:li:activity:99999999999999999999"), None);
+        assert_eq!(
+            from_linkedin_urn("urn:li:activity:99999999999999999999"),
+            None
+        );
     }
 
     #[test]

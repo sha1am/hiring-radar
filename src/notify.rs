@@ -17,25 +17,31 @@ fn tier_of(c: &Candidate) -> Tier {
 /// unicode, so fold anything non-ASCII down before it goes in a header.
 fn ascii(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { ' ' })
+        .map(|c| {
+            if c.is_ascii() && !c.is_ascii_control() {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .trim()
         .to_string()
 }
 
 /// Instant phone push via ntfy.sh. Title/priority/click/actions ride in headers.
-pub async fn push_ntfy(
-    http: &reqwest::Client,
-    cfg: &Config,
-    c: &Candidate,
-) -> anyhow::Result<()> {
+pub async fn push_ntfy(http: &reqwest::Client, cfg: &Config, c: &Candidate) -> anyhow::Result<()> {
     // With no topic the URL is just the server, which happily accepts the POST
     // and delivers it to nobody. Saying so is the difference between a fixable
     // configuration error and a push that silently goes nowhere.
     if cfg.ntfy.topic.trim().is_empty() {
         bail!("no ntfy topic configured");
     }
-    let url = format!("{}/{}", cfg.ntfy.server.trim_end_matches('/'), cfg.ntfy.topic);
+    let url = format!(
+        "{}/{}",
+        cfg.ntfy.server.trim_end_matches('/'),
+        cfg.ntfy.topic
+    );
     let dash = format!("{}/", cfg.server.base_url.trim_end_matches('/'));
     let title = ascii(&format!("{} - {}", c.title, c.company));
     // Body is not a header, so unicode is fine here.
@@ -46,7 +52,10 @@ pub async fn push_ntfy(
         c.location.clone().unwrap_or_default()
     );
     // Two action buttons: open the post, open the dashboard.
-    let actions = ascii(&format!("view, Open post, {}; view, Dashboard, {}", c.url, dash));
+    let actions = ascii(&format!(
+        "view, Open post, {}; view, Dashboard, {}",
+        c.url, dash
+    ));
 
     http.post(&url)
         .header("Title", title)
@@ -67,10 +76,7 @@ pub async fn push_ntfy(
 }
 
 fn transport(cfg: &EmailCfg) -> anyhow::Result<AsyncSmtpTransport<Tokio1Executor>> {
-    let pass = cfg
-        .smtp_password
-        .clone()
-        .context("SMTP_PASSWORD not set")?;
+    let pass = cfg.smtp_password.clone().context("SMTP_PASSWORD not set")?;
     let creds = Credentials::new(cfg.smtp_user.clone(), pass);
     let tp = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.smtp_host)?
         .port(cfg.smtp_port)
@@ -90,7 +96,10 @@ pub async fn email_self(cfg: &Config, c: &Candidate) -> anyhow::Result<()> {
     let channel = match c.apply_kind.as_str() {
         "email" => format!("Email → {}", c.apply_target.clone().unwrap_or_default()),
         "dm" => "LinkedIn DM (send manually from the dashboard)".into(),
-        "external" => format!("Apply link → {}", c.apply_target.clone().unwrap_or_default()),
+        "external" => format!(
+            "Apply link → {}",
+            c.apply_target.clone().unwrap_or_default()
+        ),
         _ => "Unknown apply channel".into(),
     };
     let body = format!(
@@ -156,7 +165,11 @@ pub async fn email_digest(cfg: &Config, items: &[Candidate]) -> anyhow::Result<(
     for c in items {
         body.push_str(&format!(
             "• {} at {} — match {:.0} — {}\n  {}\n",
-            c.title, c.company, c.score, c.age_str(), c.url
+            c.title,
+            c.company,
+            c.score,
+            c.age_str(),
+            c.url
         ));
     }
     let email = Message::builder()

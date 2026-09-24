@@ -146,7 +146,9 @@ mod tests {
     #[test]
     fn the_link_goes_to_the_post_not_the_poster() {
         // Clicking a card should land on the thing you just read about.
-        assert!(posts(&payload())[0].url.contains("/feed/update/urn:li:activity:"));
+        assert!(posts(&payload())[0]
+            .url
+            .contains("/feed/update/urn:li:activity:"));
     }
 
     #[test]
@@ -156,7 +158,8 @@ mod tests {
 
     #[test]
     fn an_entity_without_commentary_is_not_a_post() {
-        let v = serde_json::json!({"entityUrn": "urn:li:member:1", "actor": {"name": {"text": "X"}}});
+        let v =
+            serde_json::json!({"entityUrn": "urn:li:member:1", "actor": {"name": {"text": "X"}}});
         assert!(posts(&v).is_empty());
     }
 }

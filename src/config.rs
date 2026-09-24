@@ -94,8 +94,12 @@ pub struct ReleaseCfg {
     #[serde(default = "def_adaptive_end")]
     pub adaptive_end: f64,
 }
-fn def_adaptive_start() -> f64 { 82.0 }
-fn def_adaptive_end() -> f64 { 70.0 }
+fn def_adaptive_start() -> f64 {
+    82.0
+}
+fn def_adaptive_end() -> f64 {
+    70.0
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Ntfy {
@@ -126,8 +130,12 @@ pub struct ServerCfg {
     #[serde(default = "def_prune_days")]
     pub prune_after_days: i64,
 }
-fn def_radar_hours() -> i64 { 24 }
-fn def_prune_days() -> i64 { 30 }
+fn def_radar_hours() -> i64 {
+    24
+}
+fn def_prune_days() -> i64 {
+    30
+}
 
 /// Who reads the postings, and where.
 ///
@@ -162,10 +170,18 @@ pub struct LlmCfg {
     pub temperature: Option<f64>,
 }
 
-fn def_llm_provider() -> String { "none".into() }
-fn def_llm_base_url() -> String { "https://api.openai.com/v1".into() }
-fn def_llm_model() -> String { "gpt-5.4-mini".into() }
-fn def_llm_max_chars() -> usize { 6000 }
+fn def_llm_provider() -> String {
+    "none".into()
+}
+fn def_llm_base_url() -> String {
+    "https://api.openai.com/v1".into()
+}
+fn def_llm_model() -> String {
+    "gpt-5.4-mini".into()
+}
+fn def_llm_max_chars() -> usize {
+    6000
+}
 
 impl Default for LlmCfg {
     fn default() -> Self {
@@ -204,9 +220,8 @@ impl Config {
                 path.display()
             );
         }
-        let text = std::fs::read_to_string(path).map_err(|e| {
-            anyhow::anyhow!("cannot read config at {}: {e}", path.display())
-        })?;
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("cannot read config at {}: {e}", path.display()))?;
         let mut cfg: Config = toml::from_str(&text)?;
 
         // Secrets never live in the file; pull them from the environment.

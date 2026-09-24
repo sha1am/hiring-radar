@@ -141,7 +141,9 @@ pub(crate) async fn read_resume_upload(
                 }
             }
             "file" => {
-                let Ok(bytes) = field.bytes().await else { continue };
+                let Ok(bytes) = field.bytes().await else {
+                    continue;
+                };
                 if bytes.is_empty() {
                     continue;
                 }
@@ -149,9 +151,8 @@ pub(crate) async fn read_resume_upload(
                 if looks_pdf {
                     // extract_text_from_mem panics on some malformed files
                     // rather than returning Err, so it runs inside catch_unwind.
-                    let parsed = std::panic::catch_unwind(|| {
-                        pdf_extract::extract_text_from_mem(&bytes)
-                    });
+                    let parsed =
+                        std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes));
                     match parsed {
                         Ok(Ok(t)) if t.trim().len() > 100 => {
                             text = t;
@@ -165,9 +166,7 @@ pub(crate) async fn read_resume_upload(
                             );
                         }
                         Ok(Err(e)) => err = Some(format!("Couldn't read that PDF — {e}")),
-                        Err(_) => {
-                            err = Some("Couldn't read that PDF — it may be corrupt.".into())
-                        }
+                        Err(_) => err = Some("Couldn't read that PDF — it may be corrupt.".into()),
                     }
                 } else {
                     match String::from_utf8(bytes.to_vec()) {
@@ -238,20 +237,23 @@ pub(crate) async fn store_resume(
 /// Kept alongside the JSON one because a file input posting multipart is the
 /// one thing a form still does better than fetch, and because it works with
 /// JavaScript off — a reasonable thing for a resume upload to do.
-async fn resume_upload(
-    State(st): State<AppState>,
-    mp: Multipart,
-) -> impl IntoResponse {
+async fn resume_upload(State(st): State<AppState>, mp: Multipart) -> impl IntoResponse {
     match read_resume_upload(mp).await {
-        Err(msg) => (StatusCode::UNPROCESSABLE_ENTITY, Html(note_page(&msg, false))).into_response(),
+        Err(msg) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Html(note_page(&msg, false)),
+        )
+            .into_response(),
         Ok((text, filename)) => match store_resume(&st, text, filename).await {
             Ok(msg) => {
                 st.notify_ui();
                 Html(note_page(&msg, true)).into_response()
             }
-            Err(msg) => {
-                (StatusCode::UNPROCESSABLE_ENTITY, Html(note_page(&msg, false))).into_response()
-            }
+            Err(msg) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Html(note_page(&msg, false)),
+            )
+                .into_response(),
         },
     }
 }

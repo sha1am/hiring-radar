@@ -204,7 +204,8 @@ mod tests {
         let mut posting = posting();
         posting.locations_text = Some("Bengaluru, India".into());
         let detail: Detail =
-            serde_json::from_value(serde_json::json!({"country": {"descriptor": "India"}})).unwrap();
+            serde_json::from_value(serde_json::json!({"country": {"descriptor": "India"}}))
+                .unwrap();
         let p = to_post(&target(), "Acme", posting, Some(detail), NOW).unwrap();
         assert_eq!(p.location.as_deref(), Some("Bengaluru, India"));
     }

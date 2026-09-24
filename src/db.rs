@@ -1,7 +1,5 @@
 use crate::model::{now, Candidate};
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
 use std::str::FromStr;
 
@@ -235,10 +233,7 @@ pub async fn load_settings(pool: &SqlitePool) -> anyhow::Result<Option<crate::se
     }
 }
 
-pub async fn save_settings(
-    pool: &SqlitePool,
-    s: &crate::settings::Settings,
-) -> anyhow::Result<()> {
+pub async fn save_settings(pool: &SqlitePool, s: &crate::settings::Settings) -> anyhow::Result<()> {
     let json = serde_json::to_string(s)?;
     sqlx::query(
         "INSERT INTO settings (id, json, updated_at) VALUES (1, ?, ?)
@@ -392,22 +387,20 @@ pub async fn expire_stale(pool: &SqlitePool) -> anyhow::Result<u64> {
 
 /// Notifications fired in the trailing hour = spent budget.
 pub async fn budget_used(pool: &SqlitePool) -> anyhow::Result<i64> {
-    let (n,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM notifications WHERE fired_at > ?")
-            .bind(now() - 3600)
-            .fetch_one(pool)
-            .await?;
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM notifications WHERE fired_at > ?")
+        .bind(now() - 3600)
+        .fetch_one(pool)
+        .await?;
     Ok(n)
 }
 
 pub async fn poster_used(pool: &SqlitePool, company: &str) -> anyhow::Result<i64> {
-    let (n,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM notifications WHERE company = ? AND fired_at > ?",
-    )
-    .bind(company)
-    .bind(now() - 3600)
-    .fetch_one(pool)
-    .await?;
+    let (n,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM notifications WHERE company = ? AND fired_at > ?")
+            .bind(company)
+            .bind(now() - 3600)
+            .fetch_one(pool)
+            .await?;
     Ok(n)
 }
 
@@ -522,8 +515,7 @@ impl Sort {
     }
 }
 
-impl RadarFilter {
-}
+impl RadarFilter {}
 
 /// The window, narrowed by whatever the dashboard controls are set to.
 pub async fn recent_filtered(
@@ -605,26 +597,33 @@ pub async fn recent_filtered(
     );
 
     let mut query = sqlx::query_as::<_, Candidate>(&sql)
-    .bind(cutoff)
-    .bind(&f.source)
-    .bind(&f.source)
-    .bind(&f.status)
-    .bind(&f.status)
-    .bind(&f.status)
-    .bind(&f.tier)
-    .bind(&f.tier)
-    .bind(f.min_score)
-    .bind(&f.q)
-    .bind(&like)
-    .bind(&like)
-    .bind(&like)
-    .bind(&like);
+        .bind(cutoff)
+        .bind(&f.source)
+        .bind(&f.source)
+        .bind(&f.status)
+        .bind(&f.status)
+        .bind(&f.status)
+        .bind(&f.tier)
+        .bind(&f.tier)
+        .bind(f.min_score)
+        .bind(&f.q)
+        .bind(&like)
+        .bind(&like)
+        .bind(&like)
+        .bind(&like);
 
     for t in &f.tags {
         query = query.bind(crate::tags::needle(t));
     }
     // Bound in the same order the clauses were appended above.
-    for v in f.roles.iter().chain(&f.levels).chain(&f.work_modes).chain(&f.regions).chain(&f.verdicts) {
+    for v in f
+        .roles
+        .iter()
+        .chain(&f.levels)
+        .chain(&f.work_modes)
+        .chain(&f.regions)
+        .chain(&f.verdicts)
+    {
         query = query.bind(v.clone());
     }
     if let Some(n) = f.years_max_wanted {
@@ -922,7 +921,11 @@ pub async fn set_status(pool: &SqlitePool, id: i64, status: &str) -> anyhow::Res
 /// definition of "what interrupted me", useless as a definition of "what should
 /// I apply to". A post that scored 88 on a busy morning is no less worth your
 /// time for having missed a slot.
-pub async fn outbox(pool: &SqlitePool, min_score: f64, limit: i64) -> anyhow::Result<Vec<Candidate>> {
+pub async fn outbox(
+    pool: &SqlitePool,
+    min_score: f64,
+    limit: i64,
+) -> anyhow::Result<Vec<Candidate>> {
     let rows = sqlx::query_as::<_, Candidate>(
         "SELECT * FROM candidates
          WHERE score >= ?
@@ -1083,10 +1086,9 @@ pub async fn llm_usage(pool: &SqlitePool) -> anyhow::Result<(i64, i64, i64)> {
 
 /// How many rows are still waiting, for the status panel.
 pub async fn unenriched_count(pool: &SqlitePool) -> anyhow::Result<i64> {
-    let (n,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM candidates WHERE enriched_at IS NULL")
-            .fetch_one(pool)
-            .await?;
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM candidates WHERE enriched_at IS NULL")
+        .fetch_one(pool)
+        .await?;
     Ok(n)
 }
 
@@ -1101,7 +1103,14 @@ pub async fn fact_facets(
     column: &str,
     window_secs: i64,
 ) -> anyhow::Result<Vec<(String, i64)>> {
-    const ALLOWED: &[&str] = &["role", "level", "work_mode", "employment", "region", "verdict"];
+    const ALLOWED: &[&str] = &[
+        "role",
+        "level",
+        "work_mode",
+        "employment",
+        "region",
+        "verdict",
+    ];
     if !ALLOWED.contains(&column) {
         anyhow::bail!("not a facetable column: {column}");
     }
@@ -1156,7 +1165,11 @@ pub async fn backfill_regions(pool: &SqlitePool) -> anyhow::Result<u64> {
 ///
 /// Only genuinely actionable rows count — a posting you already dismissed or
 /// applied to is not telling you anything about what to learn next.
-pub async fn common_gaps(pool: &SqlitePool, window_secs: i64, limit: usize) -> anyhow::Result<Vec<(String, i64)>> {
+pub async fn common_gaps(
+    pool: &SqlitePool,
+    window_secs: i64,
+    limit: usize,
+) -> anyhow::Result<Vec<(String, i64)>> {
     let cutoff = now() - window_secs;
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT missing FROM candidates
@@ -1251,10 +1264,8 @@ mod tests {
         let guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let pool = POOL
             .get_or_init(|| async {
-                let dir = std::env::temp_dir().join(format!(
-                    "hiring-radar-test-{}",
-                    std::process::id()
-                ));
+                let dir =
+                    std::env::temp_dir().join(format!("hiring-radar-test-{}", std::process::id()));
                 // WAL leaves -wal and -shm beside the file, and a journal left
                 // by an earlier run is replayed into the new database as the
                 // schema it was written under.
@@ -1276,7 +1287,11 @@ mod tests {
 
     async fn candidate(pool: &SqlitePool, urn: &str) -> Candidate {
         insert(pool, urn, "strong", false).await;
-        eligible(pool).await.unwrap().pop().expect("one eligible row")
+        eligible(pool)
+            .await
+            .unwrap()
+            .pop()
+            .expect("one eligible row")
     }
 
     async fn insert_at(pool: &SqlitePool, urn: &str, location: &str, status: &str) {
@@ -1335,7 +1350,10 @@ mod tests {
         insert_at(pool, "urn:sent", "Berlin, Germany", "sent").await;
         insert_at(pool, "urn:idle", "Berlin, Germany", "scored").await;
 
-        assert_eq!(purge_outside_locations(pool, &india_only()).await.unwrap(), 1);
+        assert_eq!(
+            purge_outside_locations(pool, &india_only()).await.unwrap(),
+            1
+        );
         let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM candidates")
             .fetch_one(pool)
             .await
@@ -1360,11 +1378,16 @@ mod tests {
         insert_at(pool, "urn:gone", "Bengaluru, India", "dismissed").await;
         insert_at(pool, "urn:here", "Pune, India", "scored").await;
 
-        let visible = recent_filtered(pool, 86_400, &RadarFilter::default(), 50).await.unwrap();
+        let visible = recent_filtered(pool, 86_400, &RadarFilter::default(), 50)
+            .await
+            .unwrap();
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].urn, "urn:here");
 
-        let asked = RadarFilter { status: "dismissed".into(), ..Default::default() };
+        let asked = RadarFilter {
+            status: "dismissed".into(),
+            ..Default::default()
+        };
         let back = recent_filtered(pool, 86_400, &asked, 50).await.unwrap();
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].urn, "urn:gone");
@@ -1379,7 +1402,10 @@ mod tests {
 
         // Narrowed to Pune: one row dismissed, and the applied row untouched
         // even though it matches nothing about the filter either way.
-        let f = RadarFilter { q: "pune".into(), ..Default::default() };
+        let f = RadarFilter {
+            q: "pune".into(),
+            ..Default::default()
+        };
         assert_eq!(dismiss_filtered(pool, 86_400, &f, 500).await.unwrap(), 1);
 
         let rows: Vec<(String, String)> =
@@ -1447,12 +1473,19 @@ mod tests {
 
         let failures = unfire(pool, c.id).await.unwrap();
         assert_eq!(failures, 1);
-        assert_eq!(budget_used(pool).await.unwrap(), 0, "the slot must come back");
+        assert_eq!(
+            budget_used(pool).await.unwrap(),
+            0,
+            "the slot must come back"
+        );
 
         // And it is eligible again, so the next tick actually retries it.
         let again = eligible(pool).await.unwrap();
         assert_eq!(again.len(), 1);
-        assert!(mark_fired(pool, &again[0]).await.unwrap(), "must be re-sendable");
+        assert!(
+            mark_fired(pool, &again[0]).await.unwrap(),
+            "must be re-sendable"
+        );
     }
 
     #[tokio::test]
@@ -1479,7 +1512,11 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(after, "ntfy", "only the channel that worked");
-        assert_eq!(budget_used(pool).await.unwrap(), 1, "a real send spends a slot");
+        assert_eq!(
+            budget_used(pool).await.unwrap(),
+            1,
+            "a real send spends a slot"
+        );
     }
 
     #[tokio::test]

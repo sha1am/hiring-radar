@@ -8,7 +8,13 @@ use serde_json::json;
 /// finished draft is already waiting the instant a card hits the dashboard.
 #[async_trait::async_trait]
 pub trait Drafter: Send + Sync {
-    async fn draft(&self, post: &RawPost, p: &Settings, name: &str, email: &str) -> (String, String);
+    async fn draft(
+        &self,
+        post: &RawPost,
+        p: &Settings,
+        name: &str,
+        email: &str,
+    ) -> (String, String);
 }
 
 /// Instant, free, offline. Shapes the message to the post's apply channel.
@@ -16,9 +22,21 @@ pub struct TemplateDrafter;
 
 #[async_trait::async_trait]
 impl Drafter for TemplateDrafter {
-    async fn draft(&self, post: &RawPost, p: &Settings, name: &str, email: &str) -> (String, String) {
+    async fn draft(
+        &self,
+        post: &RawPost,
+        p: &Settings,
+        name: &str,
+        email: &str,
+    ) -> (String, String) {
         let subject = format!("Application: {} at {}", post.title, post.company);
-        let skills = p.keywords.iter().take(4).cloned().collect::<Vec<_>>().join(", ");
+        let skills = p
+            .keywords
+            .iter()
+            .take(4)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
         let body = match &post.apply {
             ApplyChannel::LinkedInDm { .. } => format!(
                 "Hi — saw your post about the {} role. I'm a backend engineer with \
@@ -49,7 +67,13 @@ pub struct OllamaDrafter {
 
 #[async_trait::async_trait]
 impl Drafter for OllamaDrafter {
-    async fn draft(&self, post: &RawPost, p: &Settings, name: &str, email: &str) -> (String, String) {
+    async fn draft(
+        &self,
+        post: &RawPost,
+        p: &Settings,
+        name: &str,
+        email: &str,
+    ) -> (String, String) {
         let channel = post.apply.kind();
         let prompt = format!(
             "You are helping {name} apply to a job. Write a short, specific, \

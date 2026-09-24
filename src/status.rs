@@ -101,9 +101,13 @@ impl SourceStatus {
 /// What `pipeline::ingest` decided about one post.
 #[derive(Clone, Debug)]
 pub enum Outcome {
-    Stored { score: f64 },
+    Stored {
+        score: f64,
+    },
     NotHiring,
-    BelowFloor { score: f64 },
+    BelowFloor {
+        score: f64,
+    },
     /// Discarded by the location filter rather than by score. Counted
     /// separately because otherwise turning on "only India" looks identical to
     /// the profile suddenly matching nothing.
@@ -130,7 +134,10 @@ pub struct Status {
 
 impl Status {
     pub fn new() -> Self {
-        Self { sources: BTreeMap::new(), started_at: now() }
+        Self {
+            sources: BTreeMap::new(),
+            started_at: now(),
+        }
     }
 
     pub fn entry(&mut self, name: &str) -> &mut SourceStatus {
@@ -190,7 +197,10 @@ impl Status {
     }
 
     pub fn best_score(&self) -> f64 {
-        self.sources.values().map(|s| s.best_score).fold(0.0, f64::max)
+        self.sources
+            .values()
+            .map(|s| s.best_score)
+            .fold(0.0, f64::max)
     }
 
     /// Targets that explicitly did not deliver.
@@ -219,8 +229,7 @@ pub fn diagnosis(st: &Status, floor: f64, rows_in_window: i64) -> (Level, String
     if !st.any_crawl_completed() {
         return (
             Level::Info,
-            "First crawl is still running. Entries appear as soon as it finishes."
-                .into(),
+            "First crawl is still running. Entries appear as soon as it finishes.".into(),
         );
     }
 
@@ -334,7 +343,10 @@ mod tests {
     use super::*;
 
     fn src(enabled: bool) -> SourceStatus {
-        SourceStatus { enabled, ..Default::default() }
+        SourceStatus {
+            enabled,
+            ..Default::default()
+        }
     }
 
     #[test]

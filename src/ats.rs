@@ -122,29 +122,53 @@ impl Profile {
 
 /// Headings whose section is a record of work.
 const WORK_HEADINGS: &[&str] = &[
-    "experience", "work experience", "professional experience", "employment",
-    "employment history", "career history", "projects", "personal projects",
-    "side projects", "summary", "profile", "objective", "about", "about me",
+    "experience",
+    "work experience",
+    "professional experience",
+    "employment",
+    "employment history",
+    "career history",
+    "projects",
+    "personal projects",
+    "side projects",
+    "summary",
+    "profile",
+    "objective",
+    "about",
+    "about me",
 ];
 
 /// Headings whose section is a list of words. Everything under one of these is
 /// a claim about vocabulary, not about what you have built — and for a school
 /// name or a skills index, reading it as experience is actively wrong.
 const WORDLIST_HEADINGS: &[&str] = &[
-    "skills", "technical skills", "core skills", "key skills", "technologies",
-    "tech stack", "education", "certifications", "certification", "courses",
-    "coursework", "achievements", "awards", "honors", "honours", "interests",
-    "hobbies", "publications", "activities", "references", "languages",
+    "skills",
+    "technical skills",
+    "core skills",
+    "key skills",
+    "technologies",
+    "tech stack",
+    "education",
+    "certifications",
+    "certification",
+    "courses",
+    "coursework",
+    "achievements",
+    "awards",
+    "honors",
+    "honours",
+    "interests",
+    "hobbies",
+    "publications",
+    "activities",
+    "references",
+    "languages",
 ];
 
 /// `Some(true)` for a heading that opens a section about work, `Some(false)`
 /// for one that opens a list, `None` for an ordinary line.
 fn heading_kind(line: &str) -> Option<bool> {
-    let t = line
-        .trim()
-        .trim_end_matches(':')
-        .trim()
-        .to_lowercase();
+    let t = line.trim().trim_end_matches(':').trim().to_lowercase();
     if t.is_empty() || t.len() > 32 {
         return None;
     }
@@ -293,7 +317,12 @@ fn years_from_dates(work: &str) -> Option<i64> {
 fn roles_from(work: &str) -> Vec<String> {
     let mut scored: Vec<(String, usize)> = crate::enrich::role_rules()
         .iter()
-        .map(|(role, _)| ((*role).to_string(), crate::enrich::role_evidence(work, role)))
+        .map(|(role, _)| {
+            (
+                (*role).to_string(),
+                crate::enrich::role_evidence(work, role),
+            )
+        })
         .filter(|(_, n)| *n > 0)
         .collect();
     scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -437,7 +466,10 @@ pub fn assess(
     // Dealbreakers are absolute, as they are in the lexical scorer. A word you
     // said you will not work with is not a dimension to be outvoted.
     let hay = post.haystack();
-    if s.dealbreakers.iter().any(|d| hay.contains(&d.to_lowercase())) {
+    if s.dealbreakers
+        .iter()
+        .any(|d| hay.contains(&d.to_lowercase()))
+    {
         return Assessment {
             score: 0.0,
             verdict: Some(Verdict::Skip.as_str().into()),
@@ -501,8 +533,8 @@ pub fn assess(
     let total: f64 = dimensions.iter().map(|d| d.weight).sum();
     // Divided by the weight actually present, so a board with no model reads
     // exactly as it did before there was one.
-    let score = ((sum / total.max(1.0)) * 100.0 * relevance_factor(&dimensions, blind))
-        .clamp(0.0, 100.0);
+    let score =
+        ((sum / total.max(1.0)) * 100.0 * relevance_factor(&dimensions, blind)).clamp(0.0, 100.0);
 
     let verdict = verdict_for(score, &dimensions, blind);
     let reason = reason_for(verdict, &dimensions, &missing, blind);
@@ -540,7 +572,12 @@ fn relevance_factor(dims: &[Dimension], blind: bool) -> f64 {
     if blind {
         return 0.35;
     }
-    let fit = |name: &str| dims.iter().find(|d| d.name == name).map(|d| d.fit).unwrap_or(0.5);
+    let fit = |name: &str| {
+        dims.iter()
+            .find(|d| d.name == name)
+            .map(|d| d.fit)
+            .unwrap_or(0.5)
+    };
     let relevance = 0.6 * fit("stack") + 0.4 * fit("role");
     0.35 + 0.65 * relevance
 }
@@ -551,7 +588,12 @@ fn relevance_factor(dims: &[Dimension], blind: bool) -> f64 {
 /// first and the one you cannot talk your way past in a week. Languages count
 /// double: swapping Postgres for MySQL is a Monday, swapping Go for Scala is a
 /// quarter.
-fn stack_fit(p: &Profile, f: &Facts, met: &mut Vec<String>, missing: &mut Vec<String>) -> Dimension {
+fn stack_fit(
+    p: &Profile,
+    f: &Facts,
+    met: &mut Vec<String>,
+    missing: &mut Vec<String>,
+) -> Dimension {
     // What the posting insists on, and what it would merely like. Only a model
     // reading prose can tell these apart, so this branch is dead until one has
     // read the posting — and it is the single biggest thing a model adds. "5+
@@ -567,7 +609,11 @@ fn stack_fit(p: &Profile, f: &Facts, met: &mut Vec<String>, missing: &mut Vec<St
         let mut have_req = 0usize;
 
         for tech in &required {
-            let w = if crate::tags::is_language(tech) { 2.0 } else { 1.0 };
+            let w = if crate::tags::is_language(tech) {
+                2.0
+            } else {
+                1.0
+            };
             want_w += w;
             if p.has(tech) {
                 have_w += w;
@@ -585,7 +631,11 @@ fn stack_fit(p: &Profile, f: &Facts, met: &mut Vec<String>, missing: &mut Vec<St
             if required.iter().any(|r| r.eq_ignore_ascii_case(tech)) {
                 continue;
             }
-            let w = if crate::tags::is_language(tech) { 0.7 } else { 0.35 };
+            let w = if crate::tags::is_language(tech) {
+                0.7
+            } else {
+                0.35
+            };
             want_w += w;
             if p.has(tech) {
                 have_w += w;
@@ -628,7 +678,11 @@ fn stack_fit(p: &Profile, f: &Facts, met: &mut Vec<String>, missing: &mut Vec<St
     let mut have_w = 0.0;
     let mut want_w = 0.0;
     for tech in wanted {
-        let w = if crate::tags::is_language(tech) { 2.0 } else { 1.0 };
+        let w = if crate::tags::is_language(tech) {
+            2.0
+        } else {
+            1.0
+        };
         want_w += w;
         if p.has(tech) {
             have_w += w;
@@ -658,7 +712,12 @@ fn stack_fit(p: &Profile, f: &Facts, met: &mut Vec<String>, missing: &mut Vec<St
 /// application that people win; with one year behind you it is not. The old
 /// scorer had no opinion on this at all, which is why an eight-year staff role
 /// and a one-year graduate role scored identically for the same person.
-fn years_fit(p: &Profile, f: &Facts, met: &mut Vec<String>, missing: &mut Vec<String>) -> Dimension {
+fn years_fit(
+    p: &Profile,
+    f: &Facts,
+    met: &mut Vec<String>,
+    missing: &mut Vec<String>,
+) -> Dimension {
     let (Some(have), Some(want)) = (p.years, f.years_min) else {
         return Dimension {
             name: "years".into(),
@@ -693,7 +752,10 @@ fn years_fit(p: &Profile, f: &Facts, met: &mut Vec<String>, missing: &mut Vec<St
     if gap <= 0 {
         met.push(label);
     } else {
-        missing.push(format!("{gap} more year{}", if gap == 1 { "" } else { "s" }));
+        missing.push(format!(
+            "{gap} more year{}",
+            if gap == 1 { "" } else { "s" }
+        ));
     }
 
     Dimension {
@@ -808,7 +870,12 @@ fn ladder(level: &str) -> Option<usize> {
 /// Asymmetric on purpose. A posting one rung above you is a stretch people win
 /// all the time; one rung below is a step down you probably don't want, and
 /// three rungs below is a waste of an application either way.
-fn level_fit(p: &Profile, f: &Facts, met: &mut Vec<String>, missing: &mut Vec<String>) -> Dimension {
+fn level_fit(
+    p: &Profile,
+    f: &Facts,
+    met: &mut Vec<String>,
+    missing: &mut Vec<String>,
+) -> Dimension {
     let (Some(want), Some(have)) = (f.level.as_deref(), p.level.as_deref()) else {
         return Dimension {
             name: "level".into(),
@@ -828,8 +895,8 @@ fn level_fit(p: &Profile, f: &Facts, met: &mut Vec<String>, missing: &mut Vec<St
 
     let fit = match w as i64 - h as i64 {
         0 => 1.0,
-        1 => 0.65,  // a stretch you can win
-        2 => 0.25,  // two rungs up is usually a no
+        1 => 0.65, // a stretch you can win
+        2 => 0.25, // two rungs up is usually a no
         n if n > 2 => 0.1,
         -1 => 0.7, // a step down, but they may still want you
         _ => 0.35, // well below you — likely a waste of an application
@@ -874,18 +941,31 @@ fn location_fit(post: &RawPost, s: &Settings) -> Dimension {
 /// waste an afternoon. So a hard shortfall on years or stack caps the verdict
 /// regardless of the sum.
 fn verdict_for(score: f64, dims: &[Dimension], blind: bool) -> Verdict {
-    let fit_of = |name: &str| dims.iter().find(|d| d.name == name).map(|d| d.fit).unwrap_or(1.0);
+    let fit_of = |name: &str| {
+        dims.iter()
+            .find(|d| d.name == name)
+            .map(|d| d.fit)
+            .unwrap_or(1.0)
+    };
 
     // Never advise applying to something nobody has read. Reach at best: go and
     // open it, and if it is any good the next crawl with a description will say
     // so properly.
     if blind {
-        return if score >= 25.0 { Verdict::Reach } else { Verdict::Skip };
+        return if score >= 25.0 {
+            Verdict::Reach
+        } else {
+            Verdict::Skip
+        };
     }
 
     let badly_short = fit_of("years") <= 0.3 || fit_of("stack") < 0.25 || fit_of("role") < 0.3;
     if badly_short {
-        return if score >= 55.0 { Verdict::Reach } else { Verdict::Skip };
+        return if score >= 55.0 {
+            Verdict::Reach
+        } else {
+            Verdict::Skip
+        };
     }
 
     let plain = match score {
@@ -933,7 +1013,11 @@ fn reason_for(v: Verdict, dims: &[Dimension], missing: &[String], blind: bool) -
         format!(
             " Missing {}{}.",
             shown.join(", "),
-            if more > 0 { format!(" and {more} more") } else { String::new() }
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
         )
     };
 
@@ -986,7 +1070,12 @@ mod tests {
             years: Some(3),
             level: Some("mid".into()),
             roles: vec!["backend".into()],
-            stack: vec!["Go".into(), "Postgres".into(), "Kafka".into(), "Docker".into()],
+            stack: vec![
+                "Go".into(),
+                "Postgres".into(),
+                "Kafka".into(),
+                "Docker".into(),
+            ],
         }
     }
 
@@ -1005,7 +1094,17 @@ mod tests {
 
     #[test]
     fn the_right_job_scores_well_and_says_apply() {
-        let a = assess(&candidate(), &facts("backend", "mid", 3, &["Go", "Postgres", "Kafka"]), &post("Backend Engineer", "Go, Postgres, Kafka.", "Bengaluru, India"), &settings(), None);
+        let a = assess(
+            &candidate(),
+            &facts("backend", "mid", 3, &["Go", "Postgres", "Kafka"]),
+            &post(
+                "Backend Engineer",
+                "Go, Postgres, Kafka.",
+                "Bengaluru, India",
+            ),
+            &settings(),
+            None,
+        );
         assert!(a.score >= 90.0, "{a:?}");
         assert_eq!(a.verdict.as_deref(), Some("apply"));
         assert!(a.missing.is_empty(), "{:?}", a.missing);
@@ -1017,16 +1116,40 @@ mod tests {
         // This is the case the old scorer got most wrong: a perfect stack and
         // location reached the seventies while the posting wanted twice the
         // experience, and it read as a strong match.
-        let a = assess(&candidate(), &facts("backend", "staff", 8, &["Go", "Postgres", "Kafka"]), &post("Staff Backend Engineer", "Go, Postgres, Kafka. 8+ years.", "Bengaluru, India"), &settings(), None);
+        let a = assess(
+            &candidate(),
+            &facts("backend", "staff", 8, &["Go", "Postgres", "Kafka"]),
+            &post(
+                "Staff Backend Engineer",
+                "Go, Postgres, Kafka. 8+ years.",
+                "Bengaluru, India",
+            ),
+            &settings(),
+            None,
+        );
         assert_eq!(a.verdict.as_deref(), Some("reach"), "{a:?}");
-        assert!(a.missing.iter().any(|m| m.contains("year")), "{:?}", a.missing);
+        assert!(
+            a.missing.iter().any(|m| m.contains("year")),
+            "{:?}",
+            a.missing
+        );
     }
 
     #[test]
     fn a_reason_never_contradicts_its_own_verdict() {
         // "Meets what it asks for. Missing 2 more years." shipped once, and the
         // contradiction was the scoring model telling on itself.
-        let a = assess(&candidate(), &facts("backend", "senior", 5, &["Go", "Postgres", "Kafka"]), &post("Senior Backend Engineer", "Go, Postgres, Kafka. 5+ years.", "Bengaluru, India"), &settings(), None);
+        let a = assess(
+            &candidate(),
+            &facts("backend", "senior", 5, &["Go", "Postgres", "Kafka"]),
+            &post(
+                "Senior Backend Engineer",
+                "Go, Postgres, Kafka. 5+ years.",
+                "Bengaluru, India",
+            ),
+            &settings(),
+            None,
+        );
         if !a.missing.is_empty() {
             assert!(
                 !a.reason.starts_with("Meets everything"),
@@ -1042,7 +1165,17 @@ mod tests {
     fn one_year_short_is_a_stretch_not_a_rejection() {
         // People win these. A cliff here would hide most of the jobs worth
         // applying to.
-        let a = assess(&candidate(), &facts("backend", "senior", 4, &["Go", "Postgres"]), &post("Senior Backend Engineer", "Go, Postgres. 4+ years.", "Bengaluru, India"), &settings(), None);
+        let a = assess(
+            &candidate(),
+            &facts("backend", "senior", 4, &["Go", "Postgres"]),
+            &post(
+                "Senior Backend Engineer",
+                "Go, Postgres. 4+ years.",
+                "Bengaluru, India",
+            ),
+            &settings(),
+            None,
+        );
         assert!(
             matches!(a.verdict.as_deref(), Some("stretch") | Some("apply")),
             "{a:?}"
@@ -1062,13 +1195,25 @@ mod tests {
         let b = assess(&candidate(), &other_db, &p, &settings(), None).score;
         let c = assess(&candidate(), &other_lang, &p, &settings(), None).score;
         assert!(a > b, "an unknown database should cost something");
-        assert!(b > c, "an unknown language should cost more than a database: {b} vs {c}");
+        assert!(
+            b > c,
+            "an unknown language should cost more than a database: {b} vs {c}"
+        );
     }
 
     #[test]
     fn sre_and_devops_are_nearly_the_same_job() {
-        let sre = Profile { roles: vec!["sre".into()], ..candidate() };
-        let a = assess(&sre, &facts("devops", "mid", 3, &["Go", "Docker"]), &post("DevOps Engineer", "Go, Docker.", "Bengaluru, India"), &settings(), None);
+        let sre = Profile {
+            roles: vec!["sre".into()],
+            ..candidate()
+        };
+        let a = assess(
+            &sre,
+            &facts("devops", "mid", 3, &["Go", "Docker"]),
+            &post("DevOps Engineer", "Go, Docker.", "Bengaluru, India"),
+            &settings(),
+            None,
+        );
         let role = a.dimensions.iter().find(|d| d.name == "role").unwrap();
         assert!(role.fit >= 0.85, "{role:?}");
     }
@@ -1079,7 +1224,17 @@ mod tests {
         // right city, and nothing else. Under a flat weighted sum that reached
         // 49 — forty-five points from dimensions that say nothing about whether
         // you can do the work. It has to collapse.
-        let a = assess(&candidate(), &facts("frontend", "mid", 3, &["TypeScript", "React"]), &post("Frontend Engineer", "React, TypeScript.", "Bengaluru, India"), &settings(), None);
+        let a = assess(
+            &candidate(),
+            &facts("frontend", "mid", 3, &["TypeScript", "React"]),
+            &post(
+                "Frontend Engineer",
+                "React, TypeScript.",
+                "Bengaluru, India",
+            ),
+            &settings(),
+            None,
+        );
         assert!(a.score < 25.0, "{a:?}");
         assert_eq!(a.verdict.as_deref(), Some("skip"));
     }
@@ -1088,8 +1243,18 @@ mod tests {
     fn a_vague_posting_is_damped_but_not_destroyed() {
         // Naming no technology is a fact about the writing, not about you, so
         // the relevance floor keeps such a posting in contention.
-        let vague = Facts { role: Some("backend".into()), years_min: Some(3), ..Default::default() };
-        let a = assess(&candidate(), &vague, &post("Backend Engineer", "Own services.", "Bengaluru, India"), &settings(), None);
+        let vague = Facts {
+            role: Some("backend".into()),
+            years_min: Some(3),
+            ..Default::default()
+        };
+        let a = assess(
+            &candidate(),
+            &vague,
+            &post("Backend Engineer", "Own services.", "Bengaluru, India"),
+            &settings(),
+            None,
+        );
         assert!(a.score > 45.0, "{a:?}");
     }
 
@@ -1097,8 +1262,21 @@ mod tests {
     fn a_posting_naming_no_technology_is_not_held_against_you() {
         // Half marks rather than zero: that is a fact about how the posting was
         // written, not about the candidate.
-        let bare = Facts { role: Some("backend".into()), ..Default::default() };
-        let a = assess(&candidate(), &bare, &post("Backend Engineer", "You'll own services.", "Bengaluru, India"), &settings(), None);
+        let bare = Facts {
+            role: Some("backend".into()),
+            ..Default::default()
+        };
+        let a = assess(
+            &candidate(),
+            &bare,
+            &post(
+                "Backend Engineer",
+                "You'll own services.",
+                "Bengaluru, India",
+            ),
+            &settings(),
+            None,
+        );
         let stack = a.dimensions.iter().find(|d| d.name == "stack").unwrap();
         assert_eq!(stack.fit, 0.5);
         assert!(a.missing.is_empty());
@@ -1108,7 +1286,17 @@ mod tests {
     fn a_dealbreaker_is_absolute() {
         let mut s = settings();
         s.dealbreakers = vec!["php".into()];
-        let a = assess(&candidate(), &facts("backend", "mid", 3, &["Go"]), &post("Backend Engineer", "Some legacy PHP to migrate.", "Bengaluru, India"), &s, None);
+        let a = assess(
+            &candidate(),
+            &facts("backend", "mid", 3, &["Go"]),
+            &post(
+                "Backend Engineer",
+                "Some legacy PHP to migrate.",
+                "Bengaluru, India",
+            ),
+            &s,
+            None,
+        );
         assert_eq!(a.score, 0.0);
         assert_eq!(a.verdict.as_deref(), Some("skip"));
     }
@@ -1128,7 +1316,11 @@ mod tests {
                 stack: vec![],
                 ..Default::default()
             },
-            post(title, "Partner with leaders across the business.", "Bengaluru, India"),
+            post(
+                title,
+                "Partner with leaders across the business.",
+                "Bengaluru, India",
+            ),
         )
     }
 
@@ -1150,7 +1342,17 @@ mod tests {
     fn a_job_on_the_sales_platform_is_still_an_engineering_job() {
         // The guard has to survive the titles engineers are actually hired
         // under, or ruling out HR quietly rules out half of payments.
-        let a = assess(&candidate(), &facts("backend", "mid", 3, &["Go", "Kafka"]), &post("Software Engineer, Sales Platform", "Go, Kafka.", "Bengaluru, India"), &settings(), None);
+        let a = assess(
+            &candidate(),
+            &facts("backend", "mid", 3, &["Go", "Kafka"]),
+            &post(
+                "Software Engineer, Sales Platform",
+                "Go, Kafka.",
+                "Bengaluru, India",
+            ),
+            &settings(),
+            None,
+        );
         assert!(a.score >= 70.0, "{a:?}");
     }
 
@@ -1163,7 +1365,10 @@ mod tests {
         let (f, p) = qualifiers_only("Associate, Client Delivery");
         let a = assess(&candidate(), &f, &p, &settings(), None);
         assert!(a.score < 30.0, "{a:?}");
-        assert!(matches!(a.verdict.as_deref(), Some("reach") | Some("skip")), "{a:?}");
+        assert!(
+            matches!(a.verdict.as_deref(), Some("reach") | Some("skip")),
+            "{a:?}"
+        );
         assert!(a.reason.contains("Too little"), "{}", a.reason);
     }
 
@@ -1181,16 +1386,40 @@ mod tests {
     fn the_reason_names_the_dimension_that_decided_it() {
         // The old explanation was a list of shared words, which is true of
         // every posting you would ever look at and therefore says nothing.
-        let a = assess(&candidate(), &facts("backend", "staff", 9, &["Go", "Postgres"]), &post("Staff Engineer", "Go, Postgres. 9+ years.", "Bengaluru, India"), &settings(), None);
+        let a = assess(
+            &candidate(),
+            &facts("backend", "staff", 9, &["Go", "Postgres"]),
+            &post(
+                "Staff Engineer",
+                "Go, Postgres. 9+ years.",
+                "Bengaluru, India",
+            ),
+            &settings(),
+            None,
+        );
         assert!(a.reason.contains("years"), "{}", a.reason);
         assert!(a.reason.contains("Missing"), "{}", a.reason);
     }
 
     #[test]
     fn missing_is_the_list_you_could_act_on() {
-        let a = assess(&candidate(), &facts("backend", "mid", 3, &["Go", "Kubernetes", "Rust"]), &post("Backend Engineer", "Go, Kubernetes, Rust.", "Bengaluru, India"), &settings(), None);
+        let a = assess(
+            &candidate(),
+            &facts("backend", "mid", 3, &["Go", "Kubernetes", "Rust"]),
+            &post(
+                "Backend Engineer",
+                "Go, Kubernetes, Rust.",
+                "Bengaluru, India",
+            ),
+            &settings(),
+            None,
+        );
         assert!(a.missing.contains(&"Rust".to_string()), "{:?}", a.missing);
-        assert!(a.missing.contains(&"Kubernetes".to_string()), "{:?}", a.missing);
+        assert!(
+            a.missing.contains(&"Kubernetes".to_string()),
+            "{:?}",
+            a.missing
+        );
         assert!(a.met.contains(&"Go".to_string()), "{:?}", a.met);
     }
 
@@ -1198,12 +1427,20 @@ mod tests {
     fn overqualified_scores_below_a_clean_match() {
         // Ten years against a two-year req is a real reason for silence, and
         // pretending otherwise fills the board with roles that will not reply.
-        let senior = Profile { years: Some(12), ..candidate() };
+        let senior = Profile {
+            years: Some(12),
+            ..candidate()
+        };
         let f = facts("backend", "mid", 2, &["Go"]);
         let p = post("Backend Engineer", "Go. 2+ years.", "Bengaluru, India");
         let over = assess(&senior, &f, &p, &settings(), None);
         let exact = assess(&candidate(), &f, &p, &settings(), None);
-        assert!(over.score < exact.score, "{} vs {}", over.score, exact.score);
+        assert!(
+            over.score < exact.score,
+            "{} vs {}",
+            over.score,
+            exact.score
+        );
     }
 
     #[test]
@@ -1270,7 +1507,12 @@ St. Michael's Sr. Sec. School (CBSE), Class XII: 93%   Class X: 10.0 CGPA   2017
         // as experience made every frontend posting score as though frontend
         // were his discipline.
         let p = Profile::from_resume(RESUME, None);
-        assert_eq!(p.roles.first().map(String::as_str), Some("backend"), "{:?}", p.roles);
+        assert_eq!(
+            p.roles.first().map(String::as_str),
+            Some("backend"),
+            "{:?}",
+            p.roles
+        );
         assert!(!p.roles.contains(&"frontend".into()), "{:?}", p.roles);
     }
 
@@ -1288,7 +1530,15 @@ St. Michael's Sr. Sec. School (CBSE), Class XII: 93%   Class X: 10.0 CGPA   2017
         // The skills list is dropped for roles and level, and kept for stack:
         // it is the one section that means exactly what it says.
         let p = Profile::from_resume(RESUME, None);
-        for tech in ["Go", "Kafka", "Postgres", "Kubernetes", "Redis", "Docker", "MongoDB"] {
+        for tech in [
+            "Go",
+            "Kafka",
+            "Postgres",
+            "Kubernetes",
+            "Redis",
+            "Docker",
+            "MongoDB",
+        ] {
             assert!(p.has(tech), "missing {tech} in {:?}", p.stack);
         }
     }
@@ -1296,19 +1546,43 @@ St. Michael's Sr. Sec. School (CBSE), Class XII: 93%   Class X: 10.0 CGPA   2017
     #[test]
     fn a_frontend_posting_does_not_ride_on_one_full_stack_project() {
         let p = Profile::from_resume(RESUME, None);
-        let a = assess(&p, &facts("frontend", "mid", 3, &["React", "TypeScript", "CSS"]), &post("Frontend Engineer", "React, TypeScript.", "Bengaluru, India"), &settings(), None);
+        let a = assess(
+            &p,
+            &facts("frontend", "mid", 3, &["React", "TypeScript", "CSS"]),
+            &post(
+                "Frontend Engineer",
+                "React, TypeScript.",
+                "Bengaluru, India",
+            ),
+            &settings(),
+            None,
+        );
         assert!(a.score < 55.0, "{a:?}");
-        assert!(matches!(a.verdict.as_deref(), Some("reach") | Some("skip")), "{a:?}");
+        assert!(
+            matches!(a.verdict.as_deref(), Some("reach") | Some("skip")),
+            "{a:?}"
+        );
     }
 
     #[test]
     fn the_job_he_is_actually_looking_for_scores_like_it() {
         let p = Profile::from_resume(RESUME, None);
-        let a = assess(&p, &facts("backend", "mid", 3, &["Go", "Kafka", "Postgres", "Kubernetes"]), &post(
+        let a = assess(
+            &p,
+            &facts(
+                "backend",
+                "mid",
+                3,
+                &["Go", "Kafka", "Postgres", "Kubernetes"],
+            ),
+            &post(
                 "Backend Engineer (Go)",
                 "Go, Kafka, Postgres, Kubernetes. 3+ years.",
                 "Gurugram, India",
-            ), &settings(), None);
+            ),
+            &settings(),
+            None,
+        );
         assert!(a.score >= 90.0, "{a:?}");
         assert_eq!(a.verdict.as_deref(), Some("apply"));
     }
@@ -1347,10 +1621,21 @@ St. Michael's Sr. Sec. School (CBSE), Class XII: 93%   Class X: 10.0 CGPA   2017
         let demanded = assess(&p, &read(&["Go", "Postgres", "Rust"], &[]), &post, &s, None);
         let preferred = assess(&p, &read(&["Go", "Postgres"], &["Rust"]), &post, &s, None);
 
-        assert!(preferred.score > demanded.score + 8.0, "{preferred:?} vs {demanded:?}");
+        assert!(
+            preferred.score > demanded.score + 8.0,
+            "{preferred:?} vs {demanded:?}"
+        );
         // And a bonus you do not have is never something to go and learn.
-        assert!(!preferred.missing.iter().any(|m| m == "Rust"), "{:?}", preferred.missing);
-        assert!(demanded.missing.iter().any(|m| m == "Rust"), "{:?}", demanded.missing);
+        assert!(
+            !preferred.missing.iter().any(|m| m == "Rust"),
+            "{:?}",
+            preferred.missing
+        );
+        assert!(
+            demanded.missing.iter().any(|m| m == "Rust"),
+            "{:?}",
+            demanded.missing
+        );
     }
 
     #[test]
@@ -1362,14 +1647,23 @@ St. Michael's Sr. Sec. School (CBSE), Class XII: 93%   Class X: 10.0 CGPA   2017
             &settings(),
             None,
         );
-        assert!(a.dimensions.iter().any(|d| d.name == "stack" && d.note.contains("all 2")), "{a:?}");
+        assert!(
+            a.dimensions
+                .iter()
+                .any(|d| d.name == "stack" && d.note.contains("all 2")),
+            "{a:?}"
+        );
         assert!(a.score >= 90.0, "{a:?}");
     }
 
     #[test]
     fn a_models_opinion_moves_the_score_without_being_able_to_carry_it() {
         let f = facts("backend", "mid", 3, &["Go", "Postgres", "Kafka"]);
-        let p = post("Backend Engineer", "Go, Postgres, Kafka.", "Bengaluru, India");
+        let p = post(
+            "Backend Engineer",
+            "Go, Postgres, Kafka.",
+            "Bengaluru, India",
+        );
         let base = assess(&candidate(), &f, &p, &settings(), None).score;
         let liked = assess(&candidate(), &f, &p, &settings(), Some((95.0, None))).score;
         let disliked = assess(
@@ -1377,14 +1671,26 @@ St. Michael's Sr. Sec. School (CBSE), Class XII: 93%   Class X: 10.0 CGPA   2017
             &f,
             &p,
             &settings(),
-            Some((20.0, Some("the team is hiring for a lead, not an IC".into()))),
+            Some((
+                20.0,
+                Some("the team is hiring for a lead, not an IC".into()),
+            )),
         );
 
-        assert!(liked >= base - 1.0, "a good opinion should not hurt: {liked} vs {base}");
-        assert!(disliked.score < base - 5.0, "a bad one should cost: {disliked:?}");
+        assert!(
+            liked >= base - 1.0,
+            "a good opinion should not hurt: {liked} vs {base}"
+        );
+        assert!(
+            disliked.score < base - 5.0,
+            "a bad one should cost: {disliked:?}"
+        );
         // And it has to say why, in the breakdown, like every other dimension.
         assert!(
-            disliked.dimensions.iter().any(|d| d.name == "judgement" && d.note.contains("lead")),
+            disliked
+                .dimensions
+                .iter()
+                .any(|d| d.name == "judgement" && d.note.contains("lead")),
             "{disliked:?}"
         );
     }
@@ -1402,7 +1708,10 @@ St. Michael's Sr. Sec. School (CBSE), Class XII: 93%   Class X: 10.0 CGPA   2017
             Some((100.0, Some("great company".into()))),
         );
         assert!(a.score < 45.0, "{a:?}");
-        assert!(matches!(a.verdict.as_deref(), Some("reach") | Some("skip")), "{a:?}");
+        assert!(
+            matches!(a.verdict.as_deref(), Some("reach") | Some("skip")),
+            "{a:?}"
+        );
     }
 
     #[test]
@@ -1414,7 +1723,11 @@ St. Michael's Sr. Sec. School (CBSE), Class XII: 93%   Class X: 10.0 CGPA   2017
         let a = assess(
             &candidate(),
             &facts("backend", "mid", 3, &["Go", "Postgres", "Kafka"]),
-            &post("Backend Engineer", "Go, Postgres, Kafka.", "Bengaluru, India"),
+            &post(
+                "Backend Engineer",
+                "Go, Postgres, Kafka.",
+                "Bengaluru, India",
+            ),
             &settings(),
             None,
         );

@@ -78,7 +78,10 @@ async fn clear_logs() -> impl IntoResponse {
 /// Multipart rather than JSON because it carries a file, and the extraction
 /// (and its failure modes: a scanned PDF has no text layer) is shared with the
 /// HTML endpoint rather than reimplemented.
-async fn resume_upload(State(st): State<AppState>, mp: axum::extract::Multipart) -> impl IntoResponse {
+async fn resume_upload(
+    State(st): State<AppState>,
+    mp: axum::extract::Multipart,
+) -> impl IntoResponse {
     let (text, filename) = match crate::web::read_resume_upload(mp).await {
         Ok(v) => v,
         Err(message) => {
@@ -225,15 +228,27 @@ impl CardDto {
             tier: c.tier.clone(),
             instant: c.instant,
             summary: c.summary.clone(),
-            must_have: c.must_have.as_deref().map(crate::tags::decode).unwrap_or_default(),
-            nice_to_have: c.nice_to_have.as_deref().map(crate::tags::decode).unwrap_or_default(),
+            must_have: c
+                .must_have
+                .as_deref()
+                .map(crate::tags::decode)
+                .unwrap_or_default(),
+            nice_to_have: c
+                .nice_to_have
+                .as_deref()
+                .map(crate::tags::decode)
+                .unwrap_or_default(),
             responsibilities: c
                 .responsibilities
                 .as_deref()
                 .map(crate::tags::decode)
                 .unwrap_or_default(),
             domain: c.domain.clone(),
-            red_flags: c.red_flags.as_deref().map(crate::tags::decode).unwrap_or_default(),
+            red_flags: c
+                .red_flags
+                .as_deref()
+                .map(crate::tags::decode)
+                .unwrap_or_default(),
             salary: salary_label(c),
             visa_sponsorship: c.visa_sponsorship,
             llm_fit: c.llm_fit,
@@ -247,10 +262,7 @@ impl CardDto {
                 .as_deref()
                 .map(crate::tags::decode)
                 .unwrap_or_default(),
-            why: c
-                .match_terms
-                .clone()
-                .filter(|t| !t.trim().is_empty()),
+            why: c.match_terms.clone().filter(|t| !t.trim().is_empty()),
             apply_kind: c.apply_kind.clone(),
             apply_target: c.apply_target.clone(),
             draft_subject: c.draft_subject.clone(),
@@ -264,7 +276,11 @@ impl CardDto {
             region: c.region.clone(),
             verdict: c.verdict.clone(),
             reason: c.reason.clone(),
-            missing: c.missing.as_deref().map(crate::tags::decode).unwrap_or_default(),
+            missing: c
+                .missing
+                .as_deref()
+                .map(crate::tags::decode)
+                .unwrap_or_default(),
             dimensions: c
                 .dimensions
                 .as_deref()
@@ -491,7 +507,10 @@ pub struct OutboxPage {
 /// A first load that fires four parallel requests paints in four stages, each
 /// reflowing the page. One request costs the same round trip as the slowest of
 /// them and arrives consistent with itself.
-async fn bootstrap(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+async fn bootstrap(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
     let live = st.settings().await;
     let hours = window_hours(&q, &live);
     Json(Bootstrap {
@@ -507,7 +526,10 @@ async fn bootstrap(State(st): State<AppState>, Query(q): Query<HashMap<String, S
     })
 }
 
-async fn radar(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+async fn radar(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
     let live = st.settings().await;
     let hours = window_hours(&q, &live);
     Json(radar_page(&st, hours, &q).await)
@@ -612,7 +634,10 @@ async fn send(
     Json(f): Json<DraftBody>,
 ) -> impl IntoResponse {
     let Ok(Some(c)) = db::get(&st.pool, id).await else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "no such candidate"})))
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no such candidate"})),
+        )
             .into_response();
     };
     let _ = db::set_draft(&st.pool, id, &f.subject, &f.body).await;
@@ -821,7 +846,11 @@ async fn radar_page(st: &AppState, hours: i64, q: &HashMap<String, String>) -> R
             .await
             .unwrap_or_default()
             .into_iter()
-            .map(|(v, count)| Facet { label: v.clone(), value: v, count: Some(count) })
+            .map(|(v, count)| Facet {
+                label: v.clone(),
+                value: v,
+                count: Some(count),
+            })
             .collect(),
         // Only meaningful when something is actually going to read them. With
         // no model configured these rows stay NULL forever, and a caption

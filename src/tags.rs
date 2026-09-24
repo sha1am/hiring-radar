@@ -103,9 +103,22 @@ const TECH: &[(&str, &str)] = &[
 /// says "go" AND something Go-flavoured. Without this, every "go-getter" and
 /// "ready to go" post is tagged Go.
 const GO_COMPANIONS: &[&str] = &[
-    "golang", "goroutine", "gin", "fiber", "gorm", "go developer", "go engineer",
-    "go backend", "in go", "go services", "go microservices", "of go", "with go",
-    "using go", "go programming", "go language",
+    "golang",
+    "goroutine",
+    "gin",
+    "fiber",
+    "gorm",
+    "go developer",
+    "go engineer",
+    "go backend",
+    "in go",
+    "go services",
+    "go microservices",
+    "of go",
+    "with go",
+    "using go",
+    "go programming",
+    "go language",
 ];
 
 /// Extract the technologies a post mentions, as canonical labels.
@@ -171,12 +184,26 @@ pub fn extract_list(items: &[String]) -> Vec<String> {
 /// Postgres" is not — you would learn MySQL on the Monday. So only languages
 /// get a vote on whether a post is about your stack at all.
 pub const LANGUAGES: &[&str] = &[
-    "Go", "Rust", "Python", "Java", "Kotlin", "Scala", "TypeScript", "JavaScript",
-    "C++", "C#", "Ruby", "PHP", "Elixir", "Clojure",
+    "Go",
+    "Rust",
+    "Python",
+    "Java",
+    "Kotlin",
+    "Scala",
+    "TypeScript",
+    "JavaScript",
+    "C++",
+    "C#",
+    "Ruby",
+    "PHP",
+    "Elixir",
+    "Clojure",
 ];
 
 pub fn is_language(label: &str) -> bool {
-    LANGUAGES.iter().any(|l| l.eq_ignore_ascii_case(label.trim()))
+    LANGUAGES
+        .iter()
+        .any(|l| l.eq_ignore_ascii_case(label.trim()))
 }
 
 /// Just the languages a post names.
@@ -217,19 +244,33 @@ mod tests {
         // The bare-word guard is right for prose and wrong for a list of
         // requirements: dropping "Go" from must_have loses the most important
         // entry on the board.
-        let items = vec!["Go".to_string(), "Postgres".to_string(), "strong communication".into()];
-        assert_eq!(extract_list(&items), vec!["Go".to_string(), "Postgres".to_string()]);
+        let items = vec![
+            "Go".to_string(),
+            "Postgres".to_string(),
+            "strong communication".into(),
+        ];
+        assert_eq!(
+            extract_list(&items),
+            vec!["Go".to_string(), "Postgres".to_string()]
+        );
     }
 
     #[test]
     fn a_requirement_phrase_still_reads() {
-        let items = vec!["5+ years of Go".to_string(), "experience with Kubernetes".into()];
-        assert_eq!(extract_list(&items), vec!["Go".to_string(), "Kubernetes".to_string()]);
+        let items = vec![
+            "5+ years of Go".to_string(),
+            "experience with Kubernetes".into(),
+        ];
+        assert_eq!(
+            extract_list(&items),
+            vec!["Go".to_string(), "Kubernetes".to_string()]
+        );
     }
 
     #[test]
     fn finds_the_obvious_ones() {
-        let t = extract("We need a backend engineer: Golang, Kafka, PostgreSQL, Kubernetes on AWS.");
+        let t =
+            extract("We need a backend engineer: Golang, Kafka, PostgreSQL, Kubernetes on AWS.");
         for want in ["Go", "Kafka", "Postgres", "Kubernetes", "AWS"] {
             assert!(t.contains(&want.to_string()), "missing {want} in {t:?}");
         }

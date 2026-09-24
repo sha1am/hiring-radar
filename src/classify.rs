@@ -4,19 +4,43 @@ use crate::model::RawPost;
 /// (the LinkedIn feed) need to be filtered: we want "we're hiring" posts, not
 /// "I'm open to work" posts.
 const HIRING_SIGNALS: &[&str] = &[
-    "we're hiring", "we are hiring", "hiring", "#hiring", "now hiring",
-    "open role", "open position", "open positions", "join our team",
-    "join my team", "we're looking for", "we are looking for", "apply now",
-    "job opening", "vacancy", "vacancies", "send your resume", "send your cv",
-    "dm me your", "actively recruiting", "expanding our team",
+    "we're hiring",
+    "we are hiring",
+    "hiring",
+    "#hiring",
+    "now hiring",
+    "open role",
+    "open position",
+    "open positions",
+    "join our team",
+    "join my team",
+    "we're looking for",
+    "we are looking for",
+    "apply now",
+    "job opening",
+    "vacancy",
+    "vacancies",
+    "send your resume",
+    "send your cv",
+    "dm me your",
+    "actively recruiting",
+    "expanding our team",
 ];
 
 /// Signals the *poster* is a job seeker, not an employer — suppress these.
 const SEEKING_SIGNALS: &[&str] = &[
-    "open to work", "opentowork", "seeking new opportunities", "seeking opportunities",
-    "looking for a new role", "looking for opportunities", "was laid off",
-    "recently laid off", "impacted by layoffs", "available for hire",
-    "please refer me", "kindly refer",
+    "open to work",
+    "opentowork",
+    "seeking new opportunities",
+    "seeking opportunities",
+    "looking for a new role",
+    "looking for opportunities",
+    "was laid off",
+    "recently laid off",
+    "impacted by layoffs",
+    "available for hire",
+    "please refer me",
+    "kindly refer",
 ];
 
 pub fn is_hiring(post: &RawPost) -> bool {
@@ -62,7 +86,12 @@ mod tests {
     fn every_board_listing_is_a_hiring_post_whatever_it_says() {
         // No board listing contains the word "hiring", and requiring it dropped
         // every Workday requisition on the floor.
-        for source in ["greenhouse", "linkedin_guest", "workday", "some_future_board"] {
+        for source in [
+            "greenhouse",
+            "linkedin_guest",
+            "workday",
+            "some_future_board",
+        ] {
             let p = post(source, "Backend Engineer", "Go, gRPC, Postgres.", false);
             assert!(is_hiring(&p), "{source} listing was discarded");
         }
@@ -70,7 +99,12 @@ mod tests {
 
     #[test]
     fn a_feed_post_still_has_to_say_it_is_hiring() {
-        let p = post("linkedin_voyager", "Thoughts on Go generics", "A thread.", true);
+        let p = post(
+            "linkedin_voyager",
+            "Thoughts on Go generics",
+            "A thread.",
+            true,
+        );
         assert!(!is_hiring(&p));
     }
 

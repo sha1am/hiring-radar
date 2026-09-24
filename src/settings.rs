@@ -210,21 +210,51 @@ pub struct Query {
     pub location: String,
 }
 
-fn def_resume_weight() -> f64 { 0.65 }
-fn def_per_hour_cap() -> i64 { 4 }
-fn def_per_poster_cap() -> i64 { 1 }
-fn def_score_floor() -> f64 { 55.0 }
-fn def_strong_min() -> f64 { 75.0 }
-fn def_exceptional_min() -> f64 { 92.0 }
-fn def_settle() -> i64 { 360 }
-fn def_ttl() -> i64 { 43200 }
-fn def_adaptive_start() -> f64 { 82.0 }
-fn def_adaptive_end() -> f64 { 70.0 }
-fn def_radar_hours() -> i64 { 24 }
-fn def_outbox_min() -> f64 { 70.0 }
-fn def_mode() -> String { "all".into() }
-fn def_location_policy() -> String { "prefer".into() }
-fn def_stack_policy() -> String { "off".into() }
+fn def_resume_weight() -> f64 {
+    0.65
+}
+fn def_per_hour_cap() -> i64 {
+    4
+}
+fn def_per_poster_cap() -> i64 {
+    1
+}
+fn def_score_floor() -> f64 {
+    55.0
+}
+fn def_strong_min() -> f64 {
+    75.0
+}
+fn def_exceptional_min() -> f64 {
+    92.0
+}
+fn def_settle() -> i64 {
+    360
+}
+fn def_ttl() -> i64 {
+    43200
+}
+fn def_adaptive_start() -> f64 {
+    82.0
+}
+fn def_adaptive_end() -> f64 {
+    70.0
+}
+fn def_radar_hours() -> i64 {
+    24
+}
+fn def_outbox_min() -> f64 {
+    70.0
+}
+fn def_mode() -> String {
+    "all".into()
+}
+fn def_location_policy() -> String {
+    "prefer".into()
+}
+fn def_stack_policy() -> String {
+    "off".into()
+}
 
 /// The newest set of one-time corrections. See `Settings::migrate`.
 pub const CURRENT_VERSION: i64 = 1;
@@ -248,12 +278,24 @@ fn all_in_one_country(locations: &[String], country: &str) -> bool {
 }
 /// Go, because that is the language this radar was built to watch for. Stored
 /// rather than hardcoded, so it is one edit in Settings to change.
-fn def_instant_stack() -> Vec<String> { vec!["go".into()] }
-fn def_lookback_hours() -> i64 { 24 }
-fn def_workday_lookback_days() -> i64 { 7 }
-fn def_max_pages() -> u32 { 5 }
-fn def_poll_pages() -> u32 { 2 }
-fn def_true() -> bool { true }
+fn def_instant_stack() -> Vec<String> {
+    vec!["go".into()]
+}
+fn def_lookback_hours() -> i64 {
+    24
+}
+fn def_workday_lookback_days() -> i64 {
+    7
+}
+fn def_max_pages() -> u32 {
+    5
+}
+fn def_poll_pages() -> u32 {
+    2
+}
+fn def_true() -> bool {
+    true
+}
 fn def_voyager_queries() -> Vec<String> {
     vec!["#hiring".into(), "#hiringnow".into(), "#nowhiring".into()]
 }
@@ -497,7 +539,6 @@ impl Settings {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,7 +595,10 @@ mod tests {
         let mut s: Settings =
             serde_json::from_str(r#"{"locations":["bengaluru","remote"]}"#).unwrap();
         s.migrate();
-        assert_eq!(s.locations, vec!["bengaluru".to_string(), "remote".to_string()]);
+        assert_eq!(
+            s.locations,
+            vec!["bengaluru".to_string(), "remote".to_string()]
+        );
     }
 
     #[test]
@@ -562,13 +606,16 @@ mod tests {
         let mut s: Settings =
             serde_json::from_str(r#"{"locations":["bengaluru","berlin"]}"#).unwrap();
         s.migrate();
-        assert_eq!(s.locations, vec!["bengaluru".to_string(), "berlin".to_string()]);
+        assert_eq!(
+            s.locations,
+            vec!["bengaluru".to_string(), "berlin".to_string()]
+        );
     }
 
     #[test]
     fn the_instant_list_is_normalised_like_every_other_list() {
-        let mut s: Settings = serde_json::from_str(r#"{"instant_stack":["  Go ","GO","rust",""]}"#)
-            .unwrap();
+        let mut s: Settings =
+            serde_json::from_str(r#"{"instant_stack":["  Go ","GO","rust",""]}"#).unwrap();
         s.sanitize();
         assert_eq!(s.instant_stack, vec!["go".to_string(), "rust".to_string()]);
     }

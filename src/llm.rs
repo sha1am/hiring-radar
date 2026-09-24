@@ -92,7 +92,10 @@ impl Client {
             body["temperature"] = serde_json::json!(t);
         }
 
-        let url = format!("{}/chat/completions", self.cfg.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            self.cfg.base_url.trim_end_matches('/')
+        );
         let mut last = String::new();
 
         for attempt in 0..3u32 {

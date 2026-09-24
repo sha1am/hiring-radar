@@ -151,7 +151,8 @@ mod tests {
     #[test]
     fn a_pasted_address_bar_url_parses_locale_and_all() {
         // This is the whole point: fixing a broken entry should be a paste.
-        let t = parse("https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite").unwrap();
+        let t =
+            parse("https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite").unwrap();
         assert_eq!(t, parse("nvidia:wd5:NVIDIAExternalCareerSite").unwrap());
     }
 

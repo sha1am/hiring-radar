@@ -111,7 +111,15 @@ impl JobSource for Voyager {
         // posts; a single OR'd blob returns a worse mix than separate passes.
         for term in &live.voyager_queries {
             let walk = self
-                .walk_term(&session, live, term, allowed_pages, cutoff, &mut posts, &mut out)
+                .walk_term(
+                    &session,
+                    live,
+                    term,
+                    allowed_pages,
+                    cutoff,
+                    &mut posts,
+                    &mut out,
+                )
                 .await;
 
             if walk.failed && walk.kept == 0 {
@@ -130,7 +138,11 @@ impl JobSource for Voyager {
                 live.lookback_hours,
                 walk.pages,
                 if walk.pages == 1 { "" } else { "s" },
-                if walk.exhausted { "" } else { ", page limit hit" },
+                if walk.exhausted {
+                    ""
+                } else {
+                    ", page limit hit"
+                },
             ));
         }
 
