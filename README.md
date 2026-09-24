@@ -445,6 +445,57 @@ be exercised against a fixture server. It logs a warning whenever it's set.
 cargo test          # timeparse, salary detection, freshness decay, resume ranking
 ```
 
+## GitHub Actions Deployment
+
+This project includes comprehensive GitHub Actions workflows for automated CI/CD:
+
+### Automated Workflows
+
+- **CI/CD Pipeline** (`.github/workflows/ci-cd.yml`)
+  - Builds and tests Rust code with clippy and formatting checks
+  - Builds and pushes Docker images to GitHub Container Registry (GHCR)
+  - Deploys React frontend to GitHub Pages
+  - Creates GitHub releases on version tags
+  - Runs on every push to main/develop, pull requests, and version tags
+
+- **Maintenance** (`.github/workflows/maintenance.yml`)
+  - Nightly builds to ensure code stays working
+  - Security audits for dependencies
+  - Dependency checks for outdated packages
+  - Runs daily at 2 AM UTC
+
+- **Automated Release** (`.github/workflows/release.yml`)
+  - Manual workflow to create versioned releases
+  - Creates semantic version tags (e.g., v1.2.3)
+  - Generates GitHub releases with changelog
+
+### Setting Up GitHub Pages
+
+1. Go to your repository Settings → Pages
+2. Set Source to "GitHub Actions"
+3. The frontend will be automatically deployed on push to main
+
+### Creating a Release
+
+Run the "Automated Release" workflow manually with a version number:
+- Navigate to Actions → Automated Release → Run workflow
+- Enter version in semantic format (e.g., 1.2.3)
+- This creates a Git tag and GitHub release
+
+### Docker Images
+
+Images are automatically built and pushed to GHCR:
+```bash
+docker pull ghcr.io/yourusername/hiring-radar:latest
+docker pull ghcr.io/yourusername/hiring-radar:v1.2.3
+```
+
+### Required GitHub Settings
+
+- Enable GitHub Actions in repository settings
+- Enable GitHub Pages for frontend deployment
+- Ensure repository has appropriate permissions for workflows
+
 ## Honest caveats
 
 - **Finding 4 is still open**: a candidate is marked fired *before* dispatch, so
